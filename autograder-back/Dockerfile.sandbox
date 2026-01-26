@@ -1,0 +1,23 @@
+FROM python:3.12-slim
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash sandbox
+
+# Remove unnecessary packages and clean up
+RUN apt-get update && \
+    apt-get remove -y --purge \
+        curl \
+        wget \
+        git \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /sandbox
+
+# Switch to non-root user
+USER sandbox
+
+# Default command
+CMD ["python", "--version"]
