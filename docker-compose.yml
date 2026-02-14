@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:16-alpine
+    container_name: autograder-db
+    environment:
+      POSTGRES_USER: autograder
+      POSTGRES_PASSWORD: autograder
+      POSTGRES_DB: autograder
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autograder"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and task queue
+  redis:
+    image: redis:7-alpine
+    container_name: autograder-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./autograder-back
+      dockerfile: Dockerfile.dev
+    container_name: autograder-backend
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./autograder-back:/app
+      - /var/run/docker.sock:/var/run/docker.sock  # For sandbox execution
+    environment:
+      DATABASE_URL: postgresql://autograder:autograder@db:5432/autograder
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    develop:
+      watch:
+        - path: ./autograder-back
+          action: sync
+          target: /app
+
+  # Celery Worker for async tasks
+  worker:
+    build:
+      context: ./autograder-back
+      dockerfile: Dockerfile.dev
+    container_name: autograder-worker
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4
+    volumes:
+      - ./autograder-back:/app
+      - /var/run/docker.sock:/var/run/docker.sock  # For Docker sandbox creation
+    environment:
+      DATABASE_URL: postgresql://autograder:autograder@db:5432/autograder
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    develop:
+      watch:
+        - path: ./autograder-back
+          action: sync+restart
+          target: /app
+
+volumes:
+  postgres_data:
+  redis_data:

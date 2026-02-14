@@ -6,10 +6,19 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
-    "pydantic>=2.5.0",
+    "pydantic[email]>=2.5.0",
     "python-multipart>=0.0.6",
     "anthropic>=0.40.0",
     "docker>=7.0.0",
+    "alembic>=1.18.4",
+    "psycopg2-binary>=2.9.11",
+    "redis>=7.1.1",
+    "celery[redis]>=5.3.1",
+    "pydantic-settings>=2.12.0",
+    "python-dotenv>=1.2.1",
+    "bcrypt>=5.0.0",
+    "python-jose[cryptography]>=3.5.0",
+    "passlib[bcrypt]>=1.7.4",
 ]
 
 [project.optional-dependencies]
