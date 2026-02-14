@@ -138,29 +138,29 @@
 
 ## 12. Frontend - Setup and Routing
 
-- [ ] 12.1 Setup React Router with routes (login, register, dashboard)
-- [ ] 12.2 Setup Axios for API calls with auth interceptors
-- [ ] 12.3 Implement JWT storage in localStorage with refresh logic
-- [ ] 12.4 Create protected route component checking authentication
-- [ ] 12.5 Setup global state management (Context API or Zustand)
+- [x] 12.1 Setup React Router with routes (login, register, dashboard)
+- [x] 12.2 Setup Axios for API calls with auth interceptors
+- [x] 12.3 Implement JWT storage in localStorage with refresh logic
+- [x] 12.4 Create protected route component checking authentication
+- [x] 12.5 Setup global state management (Context API or Zustand)
 
 ## 13. Frontend - Authentication UI
 
-- [ ] 13.1 Create Login page with email/password form
-- [ ] 13.2 Create Register page with validation (email, password >= 8 chars)
-- [ ] 13.3 Create Password Reset Request page
-- [ ] 13.4 Create Password Reset Confirm page (token from email link)
-- [ ] 13.5 Implement form validation and error display
-- [ ] 13.6 Add rate limiting feedback on login failures
+- [x] 13.1 Create Login page with email/password form
+- [x] 13.2 Create Register page with validation (email, password >= 8 chars)
+- [x] 13.3 Create Password Reset Request page
+- [x] 13.4 Create Password Reset Confirm page (token from email link)
+- [x] 13.5 Implement form validation and error display
+- [x] 13.6 Add rate limiting feedback on login failures
 
 ## 14. Frontend - Professor Dashboard
 
-- [ ] 14.1 Create Professor Dashboard layout with navigation
-- [ ] 14.2 Create Classes List page showing professor's classes
-- [ ] 14.3 Create Class Detail page with roster and groups
-- [ ] 14.4 Create Create Class form
-- [ ] 14.5 Create Invite Students form (manual email entry or CSV upload)
-- [ ] 14.6 Display invite code for students to join
+- [x] 14.1 Create Professor Dashboard layout with navigation
+- [x] 14.2 Create Classes List page showing professor's classes
+- [x] 14.3 Create Class Detail page with roster and groups
+- [x] 14.4 Create Create Class form
+- [x] 14.5 Create Invite Students form (manual email entry or CSV upload)
+- [x] 14.6 Display invite code for students to join
 - [ ] 14.7 Create Exercise List page with create/edit buttons
 - [ ] 14.8 Create Exercise Form (rich text editor for Markdown, file upload for datasets)
 - [ ] 14.9 Implement Markdown preview with LaTeX rendering
@@ -192,9 +192,9 @@
 - [ ] 16.3 Write unit tests for exercise and submission endpoints
 - [ ] 16.4 Write integration tests for sandbox execution
 - [ ] 16.5 Write tests for grading logic (test score, LLM, composite)
-- [ ] 16.6 Create API documentation (Swagger/OpenAPI via FastAPI)
-- [ ] 16.7 Write README with setup instructions
-- [ ] 16.8 Document environment variables and configuration
+- [x] 16.6 Create API documentation (Swagger/OpenAPI via FastAPI)
+- [x] 16.7 Write README with setup instructions
+- [x] 16.8 Document environment variables and configuration
 
 ## 17. Deployment Preparation
 

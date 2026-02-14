@@ -1,64 +1,64 @@
-import { useState } from 'react';
-import { CodeEditor, TestCases, Results } from './components';
-import { gradeCode } from './api/grader';
-import type { TestCase, GradeResponse } from './types';
+import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useAuthStore } from './store/authStore';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import { ProfessorLayout } from './layouts/ProfessorLayout';
+import { LoginPage } from './pages/LoginPage';
+import { RegisterPage } from './pages/RegisterPage';
+import { PasswordResetPage } from './pages/PasswordResetPage';
+import { PasswordResetConfirmPage } from './pages/PasswordResetConfirmPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { UnauthorizedPage } from './pages/UnauthorizedPage';
+import { ClassesListPage } from './pages/professor/ClassesListPage';
+import { ClassDetailPage } from './pages/professor/ClassDetailPage';
+import { ExercisesListPage } from './pages/professor/ExercisesListPage';
+import { GradesPage } from './pages/professor/GradesPage';
 import './App.css';
 
 function App() {
-  const [code, setCode] = useState('def add(a, b):\n    return a + b');
-  const [requirements, setRequirements] = useState('Write a function that adds two numbers');
-  const [testCases, setTestCases] = useState<TestCase[]>([
-    { input: 'add(1, 2)', expected: '3' },
-    { input: 'add(-1, 1)', expected: '0' },
-  ]);
-  const [results, setResults] = useState<GradeResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { loadUser } = useAuthStore();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await gradeCode({
-        code,
-        requirements,
-        test_cases: testCases,
-      });
-      setResults(response);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-      setResults(null);
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    loadUser();
+  }, [loadUser]);
 
   return (
-    <div className="app">
-      <header>
-        <h1>Autograder</h1>
-        <p>Submit Python code for automated grading</p>
-      </header>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/password-reset" element={<PasswordResetPage />} />
+        <Route path="/password-reset/confirm" element={<PasswordResetConfirmPage />} />
+        <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
-      <main>
-        <form onSubmit={handleSubmit} className="submission-form">
-          <CodeEditor
-            code={code}
-            onChange={setCode}
-            requirements={requirements}
-            onRequirementsChange={setRequirements}
-          />
-          <TestCases testCases={testCases} onChange={setTestCases} />
-          <button type="submit" disabled={loading} className="btn-submit">
-            {loading ? 'Grading...' : 'Grade Code'}
-          </button>
-        </form>
+        {/* Professor Dashboard */}
+        <Route
+          path="/professor"
+          element={
+            <ProtectedRoute requiredRoles={['professor', 'admin']}>
+              <ProfessorLayout />
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<Navigate to="/professor/classes" replace />} />
+          <Route path="classes" element={<ClassesListPage />} />
+          <Route path="classes/:id" element={<ClassDetailPage />} />
+          <Route path="exercises" element={<ExercisesListPage />} />
+          <Route path="grades" element={<GradesPage />} />
+        </Route>
 
-        <Results results={results} loading={loading} error={error} />
-      </main>
-    </div>
+        {/* Generic Dashboard (redirects based on role) */}
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <DashboardPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 
