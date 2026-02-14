@@ -56,10 +56,23 @@ class Settings(BaseSettings):
     max_exercise_file_size_mb: int = 10
     max_submission_file_size_mb: int = 1
 
+    # CORS
+    cors_origins: str = "*"  # Comma-separated origins or * for dev
+
+    # Logging
+    log_level: str = "INFO"
+    log_format: Literal["json", "text"] = "text"
+
     # Environment
     environment: Literal["development", "staging", "production"] = "development"
     debug: bool = True
     base_dir: Path = Path(__file__).parent.parent
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        if self.cors_origins == "*":
+            return ["*"]
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
 # Global settings instance

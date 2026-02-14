@@ -12,6 +12,7 @@ class ExerciseListCreate(BaseModel):
     closes_at: Optional[int] = None  # Unix timestamp
     late_penalty_percent_per_day: Optional[float] = Field(None, ge=0, le=100)
     auto_publish_grades: bool = True
+    randomize_order: bool = False
 
     @field_validator('title')
     @classmethod
@@ -39,6 +40,7 @@ class ExerciseListResponse(BaseModel):
     closes_at: Optional[int]
     late_penalty_percent_per_day: Optional[float]
     auto_publish_grades: bool
+    randomize_order: bool
 
     class Config:
         from_attributes = True
@@ -54,6 +56,7 @@ class ExerciseListDetailResponse(BaseModel):
     closes_at: Optional[int]
     late_penalty_percent_per_day: Optional[float]
     auto_publish_grades: bool
+    randomize_order: bool
     exercises: List["ExerciseInList"]
 
     class Config:

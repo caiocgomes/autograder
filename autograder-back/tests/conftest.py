@@ -1,8 +1,95 @@
 import pytest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock, MagicMock, patch
 from fastapi.testclient import TestClient
 
 from main import app
+from app.database import get_db
+from app.auth.dependencies import get_current_user
+from app.models.user import User, UserRole
+
+
+@pytest.fixture
+def mock_db():
+    """Mock database session"""
+    db = MagicMock()
+    db.query.return_value = db
+    db.filter.return_value = db
+    db.first.return_value = None
+    db.all.return_value = []
+    db.count.return_value = 0
+    return db
+
+
+@pytest.fixture
+def mock_professor():
+    """Mock professor user"""
+    user = Mock(spec=User)
+    user.id = 1
+    user.email = "professor@test.com"
+    user.role = UserRole.PROFESSOR
+    user.password_hash = "$2b$12$test_hash"
+    return user
+
+
+@pytest.fixture
+def mock_student():
+    """Mock student user"""
+    user = Mock(spec=User)
+    user.id = 2
+    user.email = "student@test.com"
+    user.role = UserRole.STUDENT
+    user.password_hash = "$2b$12$test_hash"
+    return user
+
+
+@pytest.fixture
+def mock_admin():
+    """Mock admin user"""
+    user = Mock(spec=User)
+    user.id = 3
+    user.email = "admin@test.com"
+    user.role = UserRole.ADMIN
+    user.password_hash = "$2b$12$test_hash"
+    return user
+
+
+@pytest.fixture
+def client_with_professor(mock_db, mock_professor):
+    """TestClient with professor auth and mocked DB"""
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: mock_professor
+    client = TestClient(app)
+    yield client, mock_db, mock_professor
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_with_student(mock_db, mock_student):
+    """TestClient with student auth and mocked DB"""
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: mock_student
+    client = TestClient(app)
+    yield client, mock_db, mock_student
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_with_admin(mock_db, mock_admin):
+    """TestClient with admin auth and mocked DB"""
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: mock_admin
+    client = TestClient(app)
+    yield client, mock_db, mock_admin
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def unauthenticated_client(mock_db):
+    """TestClient with mocked DB but no auth"""
+    app.dependency_overrides[get_db] = lambda: mock_db
+    client = TestClient(app)
+    yield client, mock_db
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture

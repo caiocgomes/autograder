@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from typing import List, Optional
+import random
 
 from app.database import get_db
 from app.auth.dependencies import get_current_user, require_role
@@ -55,7 +56,8 @@ def create_exercise_list(
         opens_at=list_data.opens_at,
         closes_at=list_data.closes_at,
         late_penalty_percent_per_day=list_data.late_penalty_percent_per_day,
-        auto_publish_grades=list_data.auto_publish_grades
+        auto_publish_grades=list_data.auto_publish_grades,
+        randomize_order=list_data.randomize_order
     )
     db.add(new_list)
     db.commit()
@@ -301,6 +303,13 @@ def get_class_lists(
             for item, exercise in items
         ]
 
+        # Deterministic shuffle for students when randomize_order is enabled
+        if lst.randomize_order and current_user.role == UserRole.STUDENT:
+            rng = random.Random(current_user.id * 31 + lst.id)
+            rng.shuffle(exercises)
+            for idx, ex in enumerate(exercises, start=1):
+                ex.position = idx
+
         result.append(
             ExerciseListDetailResponse(
                 id=lst.id,
@@ -311,6 +320,7 @@ def get_class_lists(
                 closes_at=lst.closes_at,
                 late_penalty_percent_per_day=lst.late_penalty_percent_per_day,
                 auto_publish_grades=lst.auto_publish_grades,
+                randomize_order=lst.randomize_order,
                 exercises=exercises
             )
         )

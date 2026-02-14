@@ -71,6 +71,7 @@ class ExerciseList(Base):
     closes_at = Column(Integer, nullable=True)  # Unix timestamp
     late_penalty_percent_per_day = Column(Float, nullable=True)
     auto_publish_grades = Column(Boolean, default=True, nullable=False)
+    randomize_order = Column(Boolean, default=False, nullable=False)
 
     # Relationships
     class_ = relationship("Class", back_populates="exercise_lists")

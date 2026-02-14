@@ -78,7 +78,7 @@
 - [x] 7.5 Create GET /classes/{class_id}/lists endpoint listing lists for class
 - [x] 7.6 Implement date-based visibility (opens_at, closes_at)
 - [x] 7.7 Implement group-specific list assignment
-- [ ] 7.8 Create exercise randomization logic per student (optional)
+- [x] 7.8 Create exercise randomization logic per student (optional)
 - [x] 7.9 Implement late penalty calculation (percent per day)
 
 ## 8. Backend - Code Submission
@@ -161,50 +161,50 @@
 - [x] 14.4 Create Create Class form
 - [x] 14.5 Create Invite Students form (manual email entry or CSV upload)
 - [x] 14.6 Display invite code for students to join
-- [ ] 14.7 Create Exercise List page with create/edit buttons
-- [ ] 14.8 Create Exercise Form (rich text editor for Markdown, file upload for datasets)
-- [ ] 14.9 Implement Markdown preview with LaTeX rendering
-- [ ] 14.10 Create Test Cases editor (add input/output, mark hidden)
-- [ ] 14.11 Create Exercise List builder (drag-drop exercises, set weights)
-- [ ] 14.12 Create Grades view (table with export CSV button)
-- [ ] 14.13 Create Submission Review page (view code, tests, LLM feedback, edit score)
-- [ ] 14.14 Implement batch grade publishing
+- [x] 14.7 Create Exercise List page with create/edit buttons
+- [x] 14.8 Create Exercise Form (rich text editor for Markdown, file upload for datasets)
+- [x] 14.9 Implement Markdown preview with LaTeX rendering
+- [x] 14.10 Create Test Cases editor (add input/output, mark hidden)
+- [x] 14.11 Create Exercise List builder (drag-drop exercises, set weights)
+- [x] 14.12 Create Grades view (table with export CSV button)
+- [x] 14.13 Create Submission Review page (view code, tests, LLM feedback, edit score)
+- [x] 14.14 Implement batch grade publishing
 
 ## 15. Frontend - Student Dashboard
 
-- [ ] 15.1 Create Student Dashboard layout with navigation
-- [ ] 15.2 Create My Classes page listing enrolled classes
-- [ ] 15.3 Create Join Class form (enter invite code)
-- [ ] 15.4 Create Exercise Lists view (filter by class, show deadlines)
-- [ ] 15.5 Create Exercise Detail page with description and starter code
-- [ ] 15.6 Implement in-browser code editor with syntax highlighting (Monaco or CodeMirror)
-- [ ] 15.7 Create file upload option for code submission
-- [ ] 15.8 Display submission limit and remaining attempts
-- [ ] 15.9 Create Submission History view with diff between attempts
-- [ ] 15.10 Create Submission Results page (test results, LLM feedback, score)
-- [ ] 15.11 Implement real-time status polling for running submissions
-- [ ] 15.12 Create My Grades page showing scores per exercise and list
+- [x] 15.1 Create Student Dashboard layout with navigation
+- [x] 15.2 Create My Classes page listing enrolled classes
+- [x] 15.3 Create Join Class form (enter invite code)
+- [x] 15.4 Create Exercise Lists view (filter by class, show deadlines)
+- [x] 15.5 Create Exercise Detail page with description and starter code
+- [x] 15.6 Implement in-browser code editor with syntax highlighting (Monaco or CodeMirror)
+- [x] 15.7 Create file upload option for code submission
+- [x] 15.8 Display submission limit and remaining attempts
+- [x] 15.9 Create Submission History view with diff between attempts
+- [x] 15.10 Create Submission Results page (test results, LLM feedback, score)
+- [x] 15.11 Implement real-time status polling for running submissions
+- [x] 15.12 Create My Grades page showing scores per exercise and list
 
 ## 16. Testing and Documentation
 
-- [ ] 16.1 Write unit tests for authentication endpoints
-- [ ] 16.2 Write unit tests for class management endpoints
-- [ ] 16.3 Write unit tests for exercise and submission endpoints
-- [ ] 16.4 Write integration tests for sandbox execution
-- [ ] 16.5 Write tests for grading logic (test score, LLM, composite)
+- [x] 16.1 Write unit tests for authentication endpoints
+- [x] 16.2 Write unit tests for class management endpoints
+- [x] 16.3 Write unit tests for exercise and submission endpoints
+- [x] 16.4 Write integration tests for sandbox execution
+- [x] 16.5 Write tests for grading logic (test score, LLM, composite)
 - [x] 16.6 Create API documentation (Swagger/OpenAPI via FastAPI)
 - [x] 16.7 Write README with setup instructions
 - [x] 16.8 Document environment variables and configuration
 
 ## 17. Deployment Preparation
 
-- [ ] 17.1 Create production Dockerfile for backend
-- [ ] 17.2 Create production Dockerfile for Celery worker
-- [ ] 17.3 Setup environment-specific configs (dev, staging, prod)
-- [ ] 17.4 Configure CORS for frontend domain
-- [ ] 17.5 Setup HTTPS/SSL certificates
-- [ ] 17.6 Configure database backups
-- [ ] 17.7 Setup monitoring (Prometheus/Grafana or managed service)
-- [ ] 17.8 Setup logging (structured logs with request IDs)
-- [ ] 17.9 Configure alerting for queue depth and execution failures
-- [ ] 17.10 Build and deploy frontend (Vercel/Netlify)
+- [x] 17.1 Create production Dockerfile for backend
+- [x] 17.2 Create production Dockerfile for Celery worker
+- [x] 17.3 Setup environment-specific configs (dev, staging, prod)
+- [x] 17.4 Configure CORS for frontend domain
+- [x] 17.5 Setup HTTPS/SSL certificates
+- [x] 17.6 Configure database backups
+- [x] 17.7 Setup monitoring (Prometheus/Grafana or managed service)
+- [x] 17.8 Setup logging (structured logs with request IDs)
+- [x] 17.9 Configure alerting for queue depth and execution failures
+- [x] 17.10 Build and deploy frontend (Vercel/Netlify)
