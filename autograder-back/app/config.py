@@ -54,7 +54,8 @@ class Settings(BaseSettings):
 
     # File Uploads
     max_exercise_file_size_mb: int = 10
-    max_submission_file_size_mb: int = 1
+    max_submission_file_size_mb: int = 10
+    upload_base_dir: Path = Path("./uploads")
 
     # CORS
     cors_origins: str = "*"  # Comma-separated origins or * for dev

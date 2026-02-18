@@ -68,7 +68,8 @@ export function SubmissionReviewPage() {
   if (error) return <div style={{ color: '#c00' }}>{error}</div>;
   if (!detail) return <div>Submission not found</div>;
 
-  const { submission, test_results, llm_evaluation, grade } = detail;
+  const { submission, test_results, llm_evaluation, grade, rubric_scores, overall_feedback } = detail;
+  const isFileSubmission = !submission.code && submission.file_name;
 
   return (
     <div style={{ maxWidth: '1000px' }}>
@@ -112,23 +113,95 @@ export function SubmissionReviewPage() {
         </div>
       </div>
 
-      {/* Code */}
-      <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '15px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-        <h3 style={{ marginTop: 0, color: '#2c3e50' }}>Student Code</h3>
-        <pre style={{
-          backgroundColor: '#1e1e1e',
-          color: '#d4d4d4',
-          padding: '15px',
-          borderRadius: '4px',
-          overflow: 'auto',
-          maxHeight: '400px',
-          fontSize: '13px',
-          lineHeight: '1.5',
-          fontFamily: 'monospace',
-        }}>
-          {submission.code}
-        </pre>
-      </div>
+      {/* Content: Code or File */}
+      {isFileSubmission ? (
+        <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '15px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <h3 style={{ marginTop: 0, color: '#2c3e50' }}>Submitted File</h3>
+          <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+            <div>
+              <span style={{ fontSize: '12px', color: '#7f8c8d', display: 'block' }}>File Name</span>
+              <span style={{ fontWeight: 600 }}>{submission.file_name}</span>
+            </div>
+            {submission.file_size && (
+              <div>
+                <span style={{ fontSize: '12px', color: '#7f8c8d', display: 'block' }}>Size</span>
+                <span>{submission.file_size < 1024 * 1024 ? `${(submission.file_size / 1024).toFixed(1)} KB` : `${(submission.file_size / (1024 * 1024)).toFixed(1)} MB`}</span>
+              </div>
+            )}
+            {submission.content_type && (
+              <div>
+                <span style={{ fontSize: '12px', color: '#7f8c8d', display: 'block' }}>Type</span>
+                <span>{submission.content_type}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : submission.code ? (
+        <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '15px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <h3 style={{ marginTop: 0, color: '#2c3e50' }}>Student Code</h3>
+          <pre style={{
+            backgroundColor: '#1e1e1e',
+            color: '#d4d4d4',
+            padding: '15px',
+            borderRadius: '4px',
+            overflow: 'auto',
+            maxHeight: '400px',
+            fontSize: '13px',
+            lineHeight: '1.5',
+            fontFamily: 'monospace',
+          }}>
+            {submission.code}
+          </pre>
+        </div>
+      ) : null}
+
+      {/* Rubric Scores (for llm_first exercises) */}
+      {rubric_scores && rubric_scores.length > 0 && (
+        <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '15px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <h3 style={{ marginTop: 0, color: '#2c3e50' }}>Rubric Evaluation</h3>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '2px solid #ecf0f1' }}>
+                <th style={{ padding: '8px', textAlign: 'left' }}>Dimension</th>
+                <th style={{ padding: '8px', textAlign: 'center', width: '80px' }}>Weight</th>
+                <th style={{ padding: '8px', textAlign: 'center', width: '80px' }}>Score</th>
+                <th style={{ padding: '8px', textAlign: 'left' }}>Feedback</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rubric_scores.map((rs, idx) => (
+                <tr key={idx} style={{ borderBottom: '1px solid #ecf0f1' }}>
+                  <td style={{ padding: '8px', fontWeight: 600 }}>{rs.dimension_name}</td>
+                  <td style={{ padding: '8px', textAlign: 'center', color: '#7f8c8d' }}>
+                    {(rs.dimension_weight * 100).toFixed(0)}%
+                  </td>
+                  <td style={{ padding: '8px', textAlign: 'center' }}>
+                    <span style={{
+                      fontWeight: 700,
+                      color: rs.score >= 70 ? '#2ecc71' : rs.score >= 40 ? '#f39c12' : '#e74c3c',
+                    }}>
+                      {rs.score.toFixed(1)}
+                    </span>
+                  </td>
+                  <td style={{ padding: '8px', fontSize: '13px', color: '#555', whiteSpace: 'pre-wrap' }}>
+                    {rs.feedback || '-'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Overall Feedback (for llm_first exercises) */}
+      {overall_feedback && (
+        <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '15px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <h3 style={{ marginTop: 0, color: '#2c3e50' }}>Overall Feedback</h3>
+          <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', color: '#333' }}>
+            {overall_feedback}
+          </div>
+        </div>
+      )}
 
       {/* Test Results */}
       {test_results && test_results.length > 0 && (
@@ -154,7 +227,7 @@ export function SubmissionReviewPage() {
                     </span>
                   </td>
                   <td style={{ padding: '8px', fontSize: '13px', color: '#7f8c8d' }}>
-                    {tr.message || '—'}
+                    {tr.message || '-'}
                     {tr.stderr && (
                       <pre style={{ margin: '5px 0 0', fontSize: '11px', color: '#e74c3c', whiteSpace: 'pre-wrap' }}>
                         {tr.stderr}
@@ -168,8 +241,8 @@ export function SubmissionReviewPage() {
         </div>
       )}
 
-      {/* LLM Feedback */}
-      {llm_evaluation && (
+      {/* LLM Feedback (for test_first with llm enabled) */}
+      {llm_evaluation && !rubric_scores && (
         <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '15px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
           <h3 style={{ marginTop: 0, color: '#2c3e50' }}>
             LLM Evaluation (Score: {llm_evaluation.score.toFixed(1)})
@@ -209,11 +282,11 @@ export function SubmissionReviewPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: '15px', marginBottom: '15px' }}>
             <div>
               <span style={{ fontSize: '12px', color: '#7f8c8d', display: 'block' }}>Test Score</span>
-              <span style={{ fontSize: '18px', fontWeight: 600 }}>{grade.test_score != null ? `${grade.test_score.toFixed(1)}%` : '—'}</span>
+              <span style={{ fontSize: '18px', fontWeight: 600 }}>{grade.test_score != null ? `${grade.test_score.toFixed(1)}%` : '-'}</span>
             </div>
             <div>
               <span style={{ fontSize: '12px', color: '#7f8c8d', display: 'block' }}>LLM Score</span>
-              <span style={{ fontSize: '18px', fontWeight: 600 }}>{grade.llm_score != null ? grade.llm_score.toFixed(1) : '—'}</span>
+              <span style={{ fontSize: '18px', fontWeight: 600 }}>{grade.llm_score != null ? grade.llm_score.toFixed(1) : '-'}</span>
             </div>
             <div>
               <span style={{ fontSize: '12px', color: '#7f8c8d', display: 'block' }}>Late Penalty</span>

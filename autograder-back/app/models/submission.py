@@ -24,11 +24,17 @@ class Submission(Base):
     id = Column(Integer, primary_key=True, index=True)
     exercise_id = Column(Integer, ForeignKey("exercises.id"), nullable=False, index=True)
     student_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    code = Column(Text, nullable=False)
-    code_hash = Column(String(64), nullable=False, index=True)  # SHA256 for LLM cache
+    code = Column(Text, nullable=True)  # NULL for file-upload submissions
+    content_hash = Column(String(64), nullable=False, index=True)  # SHA256 of code or file content
     status = Column(Enum(SubmissionStatus), nullable=False, default=SubmissionStatus.QUEUED)
     submitted_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     error_message = Column(Text, nullable=True)
+
+    # File upload fields (NULL for code submissions)
+    file_path = Column(String(500), nullable=True)
+    file_name = Column(String(255), nullable=True)
+    file_size = Column(Integer, nullable=True)  # bytes
+    content_type = Column(String(100), nullable=True)
 
     # Relationships
     exercise = relationship("Exercise", back_populates="submissions")
@@ -36,6 +42,7 @@ class Submission(Base):
     test_results = relationship("TestResult", back_populates="submission")
     llm_evaluation = relationship("LLMEvaluation", back_populates="submission", uselist=False)
     grade = relationship("Grade", back_populates="submission", uselist=False)
+    rubric_scores = relationship("RubricScore", back_populates="submission")
 
 
 class TestResult(Base):
@@ -60,7 +67,7 @@ class LLMEvaluation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=False, unique=True, index=True)
-    code_hash = Column(String(64), nullable=False, index=True)  # For cache lookups
+    content_hash = Column(String(64), nullable=False, index=True)  # For cache lookups
     feedback = Column(Text, nullable=False)
     score = Column(Float, nullable=False)  # 0-100
     cached = Column(Boolean, default=False, nullable=False)  # Was this from cache?
@@ -84,3 +91,21 @@ class Grade(Base):
 
     # Relationships
     submission = relationship("Submission", back_populates="grade")
+
+
+class RubricScore(Base):
+    """Score per rubric dimension for LLM-first grading"""
+    __tablename__ = "rubric_scores"
+    __table_args__ = (
+        UniqueConstraint('submission_id', 'dimension_id', name='uq_rubric_score_submission_dimension'),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=False, index=True)
+    dimension_id = Column(Integer, ForeignKey("rubric_dimensions.id"), nullable=False, index=True)
+    score = Column(Float, nullable=False)  # 0-100
+    feedback = Column(Text, nullable=True)
+
+    # Relationships
+    submission = relationship("Submission", back_populates="rubric_scores")
+    dimension = relationship("RubricDimension", back_populates="scores")

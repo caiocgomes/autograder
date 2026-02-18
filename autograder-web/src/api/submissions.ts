@@ -4,10 +4,13 @@ export interface Submission {
   id: number;
   exercise_id: number;
   student_id: number;
-  code: string;
+  code: string | null;
   status: 'queued' | 'running' | 'completed' | 'failed';
   submitted_at: string;
   error_message: string | null;
+  file_name: string | null;
+  file_size: number | null;
+  content_type: string | null;
 }
 
 export interface SubmissionListItem {
@@ -16,6 +19,7 @@ export interface SubmissionListItem {
   student_id: number;
   status: 'queued' | 'running' | 'completed' | 'failed';
   submitted_at: string;
+  file_name: string | null;
 }
 
 export interface TestResultDetail {
@@ -44,11 +48,20 @@ export interface GradeDetail {
   published: boolean;
 }
 
+export interface RubricScoreDetail {
+  dimension_name: string;
+  dimension_weight: number;
+  score: number;
+  feedback: string | null;
+}
+
 export interface SubmissionDetail {
   submission: Submission;
   test_results: TestResultDetail[] | null;
   llm_evaluation: LLMEvaluation | null;
   grade: GradeDetail | null;
+  rubric_scores: RubricScoreDetail[] | null;
+  overall_feedback: string | null;
 }
 
 export const submissionsApi = {
@@ -75,9 +88,11 @@ export const submissionsApi = {
   },
 
   submit: async (exerciseId: number, code: string) => {
-    const { data } = await apiClient.post<Submission>('/submissions', {
-      exercise_id: exerciseId,
-      code,
+    const formData = new FormData();
+    formData.append('exercise_id', String(exerciseId));
+    formData.append('code', code);
+    const { data } = await apiClient.post<Submission>('/submissions', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
     });
     return data;
   },

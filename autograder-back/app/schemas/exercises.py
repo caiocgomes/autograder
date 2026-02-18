@@ -8,6 +8,36 @@ class ProgrammingLanguage(str, Enum):
     PYTHON = "python"
 
 
+class SubmissionType(str, Enum):
+    CODE = "code"
+    FILE_UPLOAD = "file_upload"
+
+
+class GradingMode(str, Enum):
+    TEST_FIRST = "test_first"
+    LLM_FIRST = "llm_first"
+
+
+class RubricDimensionCreate(BaseModel):
+    """Schema for creating a rubric dimension"""
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    weight: float = Field(..., ge=0.0, le=1.0)
+    position: int = Field(..., ge=0)
+
+
+class RubricDimensionResponse(BaseModel):
+    """Schema for rubric dimension response"""
+    id: int
+    name: str
+    description: Optional[str]
+    weight: float
+    position: int
+
+    class Config:
+        from_attributes = True
+
+
 class ExerciseCreate(BaseModel):
     """Schema for creating an exercise"""
     title: str = Field(..., min_length=1, max_length=255)
@@ -15,17 +45,24 @@ class ExerciseCreate(BaseModel):
     template_code: Optional[str] = None
     language: ProgrammingLanguage = ProgrammingLanguage.PYTHON
 
+    # Submission and grading type
+    submission_type: SubmissionType = SubmissionType.CODE
+    grading_mode: GradingMode = GradingMode.TEST_FIRST
+
     # Constraints
     max_submissions: Optional[int] = Field(None, ge=1)
     timeout_seconds: int = Field(30, ge=1, le=300)
     memory_limit_mb: int = Field(512, ge=128, le=2048)
 
-    # Grading configuration
+    # Grading configuration (test-first)
     has_tests: bool = True
     llm_grading_enabled: bool = False
     test_weight: float = Field(0.7, ge=0.0, le=1.0)
     llm_weight: float = Field(0.3, ge=0.0, le=1.0)
     llm_grading_criteria: Optional[str] = None
+
+    # Rubric (llm-first)
+    rubric_dimensions: Optional[List[RubricDimensionCreate]] = None
 
     # Metadata
     published: bool = False
@@ -46,12 +83,19 @@ class ExerciseCreate(BaseModel):
         return v.strip()
 
     def model_post_init(self, __context):
-        """Validate grading configuration"""
-        if not self.has_tests and not self.llm_grading_enabled:
-            raise ValueError('At least one grading method required')
+        """Validate grading configuration based on grading_mode"""
+        if self.grading_mode == GradingMode.TEST_FIRST:
+            if not self.has_tests and not self.llm_grading_enabled:
+                raise ValueError('At least one grading method required for test-first mode')
+            if abs(self.test_weight + self.llm_weight - 1.0) > 0.01:
+                raise ValueError('Test weight and LLM weight must sum to 1.0')
 
-        if abs(self.test_weight + self.llm_weight - 1.0) > 0.01:
-            raise ValueError('Test weight and LLM weight must sum to 1.0')
+        elif self.grading_mode == GradingMode.LLM_FIRST:
+            if not self.rubric_dimensions:
+                raise ValueError('LLM-first exercises require at least one rubric dimension')
+            total_weight = sum(d.weight for d in self.rubric_dimensions)
+            if abs(total_weight - 1.0) > 0.01:
+                raise ValueError('Rubric dimension weights must sum to 1.0')
 
 
 class ExerciseUpdate(BaseModel):
@@ -59,6 +103,10 @@ class ExerciseUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
     template_code: Optional[str] = None
+
+    # Submission and grading type
+    submission_type: Optional[SubmissionType] = None
+    grading_mode: Optional[GradingMode] = None
 
     # Constraints
     max_submissions: Optional[int] = Field(None, ge=1)
@@ -72,6 +120,9 @@ class ExerciseUpdate(BaseModel):
     llm_weight: Optional[float] = Field(None, ge=0.0, le=1.0)
     llm_grading_criteria: Optional[str] = None
 
+    # Rubric (llm-first)
+    rubric_dimensions: Optional[List[RubricDimensionCreate]] = None
+
     # Metadata
     published: Optional[bool] = None
     tags: Optional[str] = None
@@ -84,6 +135,10 @@ class ExerciseResponse(BaseModel):
     description: str
     template_code: Optional[str]
     language: str
+
+    # Submission and grading type
+    submission_type: str
+    grading_mode: str
 
     # Constraints
     max_submissions: Optional[int]
@@ -104,6 +159,7 @@ class ExerciseResponse(BaseModel):
 
     # Relationships
     test_cases: Optional[List["TestCaseResponse"]] = None
+    rubric_dimensions: Optional[List[RubricDimensionResponse]] = None
 
     class Config:
         from_attributes = True

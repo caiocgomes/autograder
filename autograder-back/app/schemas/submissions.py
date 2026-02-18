@@ -15,7 +15,7 @@ class SubmissionStatus(str, Enum):
 class SubmissionCreate(BaseModel):
     """Schema for creating a submission via text input"""
     exercise_id: int = Field(..., gt=0)
-    code: str = Field(..., min_length=1)
+    code: Optional[str] = Field(None, min_length=1)
 
 
 class SubmissionResponse(BaseModel):
@@ -23,10 +23,15 @@ class SubmissionResponse(BaseModel):
     id: int
     exercise_id: int
     student_id: int
-    code: str
+    code: Optional[str] = None
     status: SubmissionStatus
     submitted_at: datetime
     error_message: Optional[str] = None
+
+    # File upload fields
+    file_name: Optional[str] = None
+    file_size: Optional[int] = None
+    content_type: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -39,6 +44,7 @@ class SubmissionListResponse(BaseModel):
     student_id: int
     status: SubmissionStatus
     submitted_at: datetime
+    file_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -82,9 +88,22 @@ class GradeResponse(BaseModel):
         from_attributes = True
 
 
+class RubricScoreResponse(BaseModel):
+    """Schema for rubric score response"""
+    dimension_name: str
+    dimension_weight: float
+    score: float
+    feedback: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class SubmissionDetailResponse(BaseModel):
     """Schema for detailed submission response with results"""
     submission: SubmissionResponse
     test_results: Optional[List[TestResultResponse]] = None
     llm_evaluation: Optional[LLMEvaluationResponse] = None
     grade: Optional[GradeResponse] = None
+    rubric_scores: Optional[List[RubricScoreResponse]] = None
+    overall_feedback: Optional[str] = None

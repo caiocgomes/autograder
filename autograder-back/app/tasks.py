@@ -387,14 +387,14 @@ def llm_evaluate_submission(self, submission_id: int):
         # Check cache first
         from app.models.submission import LLMEvaluation
         cached_eval = db.query(LLMEvaluation).filter(
-            LLMEvaluation.code_hash == submission.code_hash
+            LLMEvaluation.content_hash == submission.content_hash
         ).first()
 
         if cached_eval:
             # Use cached evaluation
             new_eval = LLMEvaluation(
                 submission_id=submission.id,
-                code_hash=submission.code_hash,
+                content_hash=submission.content_hash,
                 feedback=cached_eval.feedback,
                 score=cached_eval.score,
                 cached=True
@@ -482,7 +482,7 @@ def llm_evaluate_submission(self, submission_id: int):
             # Save evaluation
             llm_eval = LLMEvaluation(
                 submission_id=submission.id,
-                code_hash=submission.code_hash,
+                content_hash=submission.content_hash,
                 feedback=feedback,
                 score=score,
                 cached=False
@@ -537,6 +537,424 @@ def llm_evaluate_submission(self, submission_id: int):
             db.commit()
 
         return {"error": str(e), "fallback": True}
+
+    finally:
+        db.close()
+
+
+# ── LLM-first grading pipeline ──────────────────────────────────────────
+
+
+def create_rubric_prompt(exercise, rubric_dimensions, content, is_image=False):
+    """
+    Build prompt for rubric-based LLM evaluation.
+
+    Args:
+        exercise: Exercise ORM object
+        rubric_dimensions: List of RubricDimension objects
+        content: Extracted text content (or None if image)
+        is_image: If True, returns list for multimodal input
+
+    Returns:
+        str prompt for text, or list of content blocks for multimodal
+    """
+    dims_text = "\n".join(
+        f"- {d.name} (peso: {d.weight}): {d.description or 'Sem descrição adicional'}"
+        for d in rubric_dimensions
+    )
+
+    dim_names_json = ", ".join(f'"{d.name}"' for d in rubric_dimensions)
+
+    base_prompt = f"""Você está avaliando uma submissão de aluno.
+
+**Exercício:** {exercise.title}
+
+**Descrição:**
+{exercise.description}
+
+**Rubrica de avaliação:**
+{dims_text}
+
+Avalie a submissão em cada dimensão da rubrica.
+Responda SOMENTE com JSON válido no formato:
+{{
+  "dimensions": [
+    {{"name": "<nome da dimensão>", "score": <0-100>, "feedback": "<feedback>"}},
+    ...
+  ],
+  "overall_feedback": "<feedback geral>"
+}}
+
+As dimensões DEVEM ser exatamente: [{dim_names_json}]"""
+
+    if is_image:
+        return [
+            {"type": "text", "text": base_prompt + "\n\nA submissão é a imagem anexada."},
+        ]
+
+    return base_prompt + f"\n\n**Submissão do aluno:**\n{content}"
+
+
+def parse_rubric_response(response_text, expected_dimensions):
+    """
+    Parse and validate LLM rubric response.
+
+    Args:
+        response_text: Raw LLM response text
+        expected_dimensions: List of RubricDimension objects
+
+    Returns:
+        dict with 'dimensions' list and 'overall_feedback'
+
+    Raises:
+        ValueError: If response is malformed or dimensions don't match
+    """
+    import json as _json
+
+    text = response_text.strip()
+    # Extract JSON from markdown code blocks if present
+    if "```json" in text:
+        start = text.find("```json") + 7
+        end = text.find("```", start)
+        text = text[start:end].strip()
+    elif "```" in text:
+        start = text.find("```") + 3
+        end = text.find("```", start)
+        text = text[start:end].strip()
+
+    result = _json.loads(text)
+
+    if "dimensions" not in result:
+        raise ValueError("Response missing 'dimensions' key")
+
+    expected_names = {d.name for d in expected_dimensions}
+    response_names = {d["name"] for d in result["dimensions"]}
+
+    missing = expected_names - response_names
+    if missing:
+        raise ValueError(f"Missing dimensions in response: {missing}")
+
+    # Clamp scores to 0-100
+    for dim in result["dimensions"]:
+        dim["score"] = max(0, min(100, float(dim["score"])))
+        dim["feedback"] = dim.get("feedback", "")
+
+    result["overall_feedback"] = result.get("overall_feedback", "")
+    return result
+
+
+def _call_llm(prompt, image_path=None):
+    """
+    Call configured LLM provider. Returns response text.
+
+    Args:
+        prompt: Text prompt or list of content blocks (multimodal)
+        image_path: Path to image file for multimodal input (Anthropic)
+    """
+    from app.config import settings
+    import anthropic
+    import openai
+
+    if settings.llm_provider == "anthropic" and settings.anthropic_api_key:
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+        if image_path:
+            import base64
+            import mimetypes
+            media_type = mimetypes.guess_type(str(image_path))[0] or "image/png"
+            image_data = Path(image_path).read_bytes()
+            b64 = base64.b64encode(image_data).decode("utf-8")
+
+            messages_content = [
+                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+            ]
+            if isinstance(prompt, list):
+                messages_content.extend(prompt)
+            else:
+                messages_content.append({"type": "text", "text": prompt})
+
+            message = client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=2048,
+                messages=[{"role": "user", "content": messages_content}]
+            )
+        else:
+            message = client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=2048,
+                messages=[{"role": "user", "content": prompt if isinstance(prompt, str) else prompt}]
+            )
+        return message.content[0].text
+
+    elif settings.llm_provider == "openai" and settings.openai_api_key:
+        client = openai.OpenAI(api_key=settings.openai_api_key)
+
+        messages_content = []
+        if image_path:
+            import base64
+            import mimetypes
+            media_type = mimetypes.guess_type(str(image_path))[0] or "image/png"
+            image_data = Path(image_path).read_bytes()
+            b64 = base64.b64encode(image_data).decode("utf-8")
+
+            if isinstance(prompt, list):
+                for block in prompt:
+                    messages_content.append(block)
+            else:
+                messages_content.append({"type": "text", "text": prompt})
+            messages_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{b64}"}
+            })
+        else:
+            if isinstance(prompt, str):
+                messages_content = prompt
+            else:
+                messages_content = prompt
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a grading assistant."},
+                {"role": "user", "content": messages_content}
+            ],
+            temperature=0.3
+        )
+        return response.choices[0].message.content
+
+    else:
+        raise ValueError("No LLM API key configured")
+
+
+@celery_app.task(
+    name="app.tasks.grade_llm_first",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60
+)
+def grade_llm_first(self, submission_id: int, late_penalty: float = 0.0):
+    """
+    Grade submission using LLM with rubric (llm-first mode).
+    No sandbox, no Docker, no test harness.
+    """
+    import json as _json
+
+    db: Session = SessionLocal()
+
+    try:
+        from app.models.submission import LLMEvaluation, RubricScore
+        from app.models.exercise import RubricDimension
+        from app.services.file_storage import get_absolute_path
+
+        submission = db.query(Submission).filter(Submission.id == submission_id).first()
+        if not submission:
+            return {"error": "Submission not found"}
+
+        submission.status = SubmissionStatus.RUNNING
+        db.commit()
+
+        exercise = db.query(Exercise).filter(Exercise.id == submission.exercise_id).first()
+        if not exercise:
+            submission.status = SubmissionStatus.FAILED
+            submission.error_message = "Exercise not found"
+            db.commit()
+            return {"error": "Exercise not found"}
+
+        rubric_dims = (
+            db.query(RubricDimension)
+            .filter(RubricDimension.exercise_id == exercise.id)
+            .order_by(RubricDimension.position)
+            .all()
+        )
+
+        if not rubric_dims:
+            submission.status = SubmissionStatus.FAILED
+            submission.error_message = "No rubric dimensions configured"
+            db.commit()
+            return {"error": "No rubric dimensions"}
+
+        # Check cache: same content_hash AND same exercise (rubric may differ between exercises)
+        cached_eval = (
+            db.query(LLMEvaluation)
+            .join(Submission, LLMEvaluation.submission_id == Submission.id)
+            .filter(
+                LLMEvaluation.content_hash == submission.content_hash,
+                Submission.exercise_id == exercise.id,
+                LLMEvaluation.submission_id != submission.id,
+            )
+            .first()
+        )
+
+        if cached_eval:
+            # Copy cached rubric scores
+            cached_scores = (
+                db.query(RubricScore)
+                .filter(RubricScore.submission_id == cached_eval.submission_id)
+                .all()
+            )
+
+            for cs in cached_scores:
+                new_score = RubricScore(
+                    submission_id=submission.id,
+                    dimension_id=cs.dimension_id,
+                    score=cs.score,
+                    feedback=cs.feedback,
+                )
+                db.add(new_score)
+
+            new_eval = LLMEvaluation(
+                submission_id=submission.id,
+                content_hash=submission.content_hash,
+                feedback=cached_eval.feedback,
+                score=cached_eval.score,
+                cached=True,
+            )
+            db.add(new_eval)
+
+            # Calculate weighted score
+            final_score = sum(
+                cs.score * next(d.weight for d in rubric_dims if d.id == cs.dimension_id)
+                for cs in cached_scores
+            )
+
+            grade = Grade(
+                submission_id=submission.id,
+                llm_score=final_score,
+                final_score=max(0, final_score - late_penalty),
+                late_penalty_applied=late_penalty,
+                published=False,
+            )
+            db.add(grade)
+            submission.status = SubmissionStatus.COMPLETED
+            db.commit()
+
+            return {"submission_id": submission.id, "cached": True, "final_score": grade.final_score}
+
+        # Determine content and whether it's an image
+        is_image = False
+        image_path = None
+        content = None
+
+        if submission.file_path and submission.content_type:
+            abs_path = get_absolute_path(submission.file_path)
+            if submission.content_type.startswith("image/"):
+                is_image = True
+                image_path = abs_path
+            else:
+                from app.services.content_extractor import extract_content
+                content = extract_content(str(abs_path), submission.content_type)
+        else:
+            # Code submission with llm-first grading
+            content = submission.code
+
+        # Build prompt
+        prompt = create_rubric_prompt(exercise, rubric_dims, content, is_image=is_image)
+
+        # Call LLM (with retry on malformed response)
+        parsed = None
+        for attempt in range(2):
+            try:
+                response_text = _call_llm(
+                    prompt if not is_image else prompt,
+                    image_path=image_path if is_image else None,
+                )
+                parsed = parse_rubric_response(response_text, rubric_dims)
+                break
+            except (ValueError, _json.JSONDecodeError) as parse_err:
+                if attempt == 0:
+                    # Retry with corrective prompt
+                    if isinstance(prompt, list):
+                        prompt.append({
+                            "type": "text",
+                            "text": f"\n\nSua resposta anterior não era JSON válido. Erro: {parse_err}. Tente novamente com JSON válido."
+                        })
+                    else:
+                        prompt += f"\n\nSua resposta anterior não era JSON válido. Erro: {parse_err}. Tente novamente com JSON válido."
+                    continue
+                else:
+                    submission.status = SubmissionStatus.FAILED
+                    submission.error_message = f"LLM returned invalid response after retry: {parse_err}"
+                    db.commit()
+                    return {"error": str(parse_err)}
+
+        if not parsed:
+            submission.status = SubmissionStatus.FAILED
+            submission.error_message = "Failed to parse LLM response"
+            db.commit()
+            return {"error": "Parse failure"}
+
+        # Persist rubric scores
+        dim_by_name = {d.name: d for d in rubric_dims}
+        for dim_result in parsed["dimensions"]:
+            dim_obj = dim_by_name.get(dim_result["name"])
+            if not dim_obj:
+                continue
+            rs = RubricScore(
+                submission_id=submission.id,
+                dimension_id=dim_obj.id,
+                score=dim_result["score"],
+                feedback=dim_result["feedback"],
+            )
+            db.add(rs)
+
+        # Calculate weighted final score
+        final_score = sum(
+            dim_by_name[d["name"]].weight * d["score"]
+            for d in parsed["dimensions"]
+            if d["name"] in dim_by_name
+        )
+
+        # Persist LLM evaluation
+        llm_eval = LLMEvaluation(
+            submission_id=submission.id,
+            content_hash=submission.content_hash,
+            feedback=parsed["overall_feedback"],
+            score=final_score,
+            cached=False,
+        )
+        db.add(llm_eval)
+
+        # Create grade
+        grade = Grade(
+            submission_id=submission.id,
+            llm_score=final_score,
+            final_score=max(0, final_score - late_penalty),
+            late_penalty_applied=late_penalty,
+            published=False,
+        )
+        db.add(grade)
+
+        submission.status = SubmissionStatus.COMPLETED
+        db.commit()
+
+        return {
+            "submission_id": submission.id,
+            "cached": False,
+            "final_score": grade.final_score,
+            "dimensions": len(parsed["dimensions"]),
+        }
+
+    except Exception as e:
+        import anthropic
+        import openai
+
+        if isinstance(e, (anthropic.RateLimitError,)):
+            raise self.retry(exc=e, countdown=120)
+
+        if isinstance(e, (anthropic.APIError, openai.APIError)):
+            if self.request.retries < self.max_retries:
+                raise self.retry(exc=e)
+
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=e)
+
+        submission = db.query(Submission).filter(Submission.id == submission_id).first()
+        if submission:
+            submission.status = SubmissionStatus.FAILED
+            submission.error_message = f"LLM grading failed after {self.max_retries} retries: {str(e)}"
+            db.commit()
+
+        return {"error": str(e)}
 
     finally:
         db.close()

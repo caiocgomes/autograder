@@ -9,7 +9,7 @@ from pathlib import Path
 from app.database import get_db
 from app.auth.dependencies import get_current_user, require_role
 from app.models.user import User, UserRole
-from app.models.exercise import Exercise, TestCase, ProgrammingLanguage
+from app.models.exercise import Exercise, TestCase, ProgrammingLanguage, RubricDimension, GradingMode
 from app.models.submission import Submission
 from app.schemas.exercises import (
     ExerciseCreate,
@@ -42,6 +42,8 @@ def create_exercise(
         description=exercise_data.description,
         template_code=exercise_data.template_code,
         language=exercise_data.language,
+        submission_type=exercise_data.submission_type,
+        grading_mode=exercise_data.grading_mode,
         max_submissions=exercise_data.max_submissions,
         timeout_seconds=exercise_data.timeout_seconds,
         memory_limit_mb=exercise_data.memory_limit_mb,
@@ -55,6 +57,20 @@ def create_exercise(
         tags=exercise_data.tags
     )
     db.add(new_exercise)
+    db.flush()  # Get ID before creating rubric dimensions
+
+    # Create rubric dimensions for llm-first exercises
+    if exercise_data.grading_mode == "llm_first" and exercise_data.rubric_dimensions:
+        for dim_data in exercise_data.rubric_dimensions:
+            dim = RubricDimension(
+                exercise_id=new_exercise.id,
+                name=dim_data.name,
+                description=dim_data.description,
+                weight=dim_data.weight,
+                position=dim_data.position,
+            )
+            db.add(dim)
+
     db.commit()
     db.refresh(new_exercise)
 
@@ -86,25 +102,51 @@ def update_exercise(
     # Note: In a production system, we might return a warning in response headers
     # For now, we just proceed with the update
 
-    # Update fields
+    # Update fields (exclude rubric_dimensions from direct setattr)
     update_data = exercise_data.model_dump(exclude_unset=True)
+    rubric_dims_data = update_data.pop("rubric_dimensions", None)
+
     for field, value in update_data.items():
         setattr(exercise, field, value)
 
-    # Validate grading configuration if relevant fields were updated
-    if 'has_tests' in update_data or 'llm_grading_enabled' in update_data:
-        if not exercise.has_tests and not exercise.llm_grading_enabled:
+    # Validate grading configuration based on mode
+    if exercise.grading_mode == GradingMode.TEST_FIRST:
+        if 'has_tests' in update_data or 'llm_grading_enabled' in update_data:
+            if not exercise.has_tests and not exercise.llm_grading_enabled:
+                raise HTTPException(
+                    status_code=400,
+                    detail="At least one grading method required"
+                )
+
+        if 'test_weight' in update_data or 'llm_weight' in update_data:
+            if abs(exercise.test_weight + exercise.llm_weight - 1.0) > 0.01:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Test weight and LLM weight must sum to 1.0"
+                )
+
+    # Handle rubric dimension updates (only if no submissions exist)
+    if rubric_dims_data is not None and exercise.grading_mode == GradingMode.LLM_FIRST:
+        if submission_count > 0:
             raise HTTPException(
                 status_code=400,
-                detail="At least one grading method required"
+                detail="Cannot modify rubric after submissions exist. Create a new exercise instead."
             )
 
-    if 'test_weight' in update_data or 'llm_weight' in update_data:
-        if abs(exercise.test_weight + exercise.llm_weight - 1.0) > 0.01:
-            raise HTTPException(
-                status_code=400,
-                detail="Test weight and LLM weight must sum to 1.0"
+        # Replace existing dimensions
+        db.query(RubricDimension).filter(
+            RubricDimension.exercise_id == exercise_id
+        ).delete()
+
+        for dim_data in rubric_dims_data:
+            dim = RubricDimension(
+                exercise_id=exercise_id,
+                name=dim_data["name"],
+                description=dim_data.get("description"),
+                weight=dim_data["weight"],
+                position=dim_data["position"],
             )
+            db.add(dim)
 
     db.commit()
     db.refresh(exercise)

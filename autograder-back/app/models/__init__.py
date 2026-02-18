@@ -8,6 +8,9 @@ from .exercise import (
     ExerciseList,
     ExerciseListItem,
     ProgrammingLanguage,
+    SubmissionType,
+    GradingMode,
+    RubricDimension,
 )
 from .submission import (
     Submission,
@@ -15,6 +18,7 @@ from .submission import (
     LLMEvaluation,
     Grade,
     SubmissionStatus,
+    RubricScore,
 )
 
 __all__ = [
@@ -30,9 +34,13 @@ __all__ = [
     "ExerciseList",
     "ExerciseListItem",
     "ProgrammingLanguage",
+    "SubmissionType",
+    "GradingMode",
+    "RubricDimension",
     "Submission",
     "TestResult",
     "LLMEvaluation",
     "Grade",
     "SubmissionStatus",
+    "RubricScore",
 ]

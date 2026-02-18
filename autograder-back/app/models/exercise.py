@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean, ForeignKey, Enum, Float
+from sqlalchemy import Column, Integer, String, Text, Boolean, ForeignKey, Enum, Float, UniqueConstraint
 from sqlalchemy.orm import relationship
 import enum
 
@@ -8,6 +8,18 @@ from .base import Base
 class ProgrammingLanguage(str, enum.Enum):
     """Supported programming languages"""
     PYTHON = "python"
+
+
+class SubmissionType(str, enum.Enum):
+    """What the student submits"""
+    CODE = "code"
+    FILE_UPLOAD = "file_upload"
+
+
+class GradingMode(str, enum.Enum):
+    """How the submission is evaluated"""
+    TEST_FIRST = "test_first"
+    LLM_FIRST = "llm_first"
 
 
 class Exercise(Base):
@@ -20,12 +32,16 @@ class Exercise(Base):
     template_code = Column(Text, nullable=True)
     language = Column(Enum(ProgrammingLanguage), nullable=False, default=ProgrammingLanguage.PYTHON)
 
+    # Submission and grading type
+    submission_type = Column(Enum(SubmissionType), nullable=False, default=SubmissionType.CODE)
+    grading_mode = Column(Enum(GradingMode), nullable=False, default=GradingMode.TEST_FIRST)
+
     # Constraints
     max_submissions = Column(Integer, nullable=True)  # null = unlimited
     timeout_seconds = Column(Integer, default=30, nullable=False)
     memory_limit_mb = Column(Integer, default=512, nullable=False)
 
-    # Grading configuration
+    # Grading configuration (test-first mode)
     has_tests = Column(Boolean, default=True, nullable=False)
     llm_grading_enabled = Column(Boolean, default=False, nullable=False)
     test_weight = Column(Float, default=0.7, nullable=False)  # Weight for test score
@@ -40,6 +56,7 @@ class Exercise(Base):
     # Relationships
     creator = relationship("User")
     test_cases = relationship("TestCase", back_populates="exercise")
+    rubric_dimensions = relationship("RubricDimension", back_populates="exercise", order_by="RubricDimension.position")
     list_items = relationship("ExerciseListItem", back_populates="exercise")
     submissions = relationship("Submission", back_populates="exercise")
 
@@ -92,3 +109,19 @@ class ExerciseListItem(Base):
     # Relationships
     list_ = relationship("ExerciseList", back_populates="items")
     exercise = relationship("Exercise", back_populates="list_items")
+
+
+class RubricDimension(Base):
+    """Rubric dimension for LLM-first grading"""
+    __tablename__ = "rubric_dimensions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    exercise_id = Column(Integer, ForeignKey("exercises.id"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    weight = Column(Float, nullable=False)  # 0.0-1.0, sum per exercise must be 1.0
+    position = Column(Integer, nullable=False)
+
+    # Relationships
+    exercise = relationship("Exercise", back_populates="rubric_dimensions")
+    scores = relationship("RubricScore", back_populates="dimension")

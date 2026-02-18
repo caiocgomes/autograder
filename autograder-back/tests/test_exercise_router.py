@@ -2,7 +2,14 @@
 import pytest
 from unittest.mock import Mock, MagicMock, patch
 from app.models.user import User, UserRole
-from app.models.exercise import Exercise, TestCase, ExerciseList, ExerciseListItem
+from app.models.exercise import Exercise, TestCase, ExerciseList, ExerciseListItem, SubmissionType, GradingMode
+
+
+def _add_exercise_defaults(mock_exercise):
+    """Add default values for new exercise fields to a mock."""
+    mock_exercise.submission_type = SubmissionType.CODE
+    mock_exercise.grading_mode = GradingMode.TEST_FIRST
+    mock_exercise.rubric_dimensions = []
 
 
 class TestCreateExercise:
@@ -70,6 +77,7 @@ class TestListExercises:
         mock_exercise.published = True
         mock_exercise.tags = "test"
         mock_exercise.test_cases = []
+        _add_exercise_defaults(mock_exercise)
 
         mock_db.query.return_value.filter.return_value.all.return_value = [mock_exercise]
 
@@ -98,6 +106,7 @@ class TestGetExercise:
         mock_exercise.published = True
         mock_exercise.tags = None
         mock_exercise.test_cases = []
+        _add_exercise_defaults(mock_exercise)
 
         mock_db.query.return_value.filter.return_value.first.return_value = mock_exercise
 
@@ -151,6 +160,7 @@ class TestPublishExercise:
         mock_exercise.published = False
         mock_exercise.tags = None
         mock_exercise.test_cases = []
+        _add_exercise_defaults(mock_exercise)
 
         mock_db.query.return_value.filter.return_value.first.return_value = mock_exercise
 

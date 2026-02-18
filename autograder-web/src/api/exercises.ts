@@ -1,11 +1,24 @@
 import { apiClient } from './client';
 
+export type SubmissionType = 'code' | 'file_upload';
+export type GradingMode = 'test_first' | 'llm_first';
+
+export interface RubricDimension {
+  id?: number;
+  name: string;
+  description?: string;
+  weight: number;
+  position: number;
+}
+
 export interface Exercise {
   id: number;
   title: string;
   description: string;
   template_code: string | null;
   language: string;
+  submission_type: SubmissionType;
+  grading_mode: GradingMode;
   max_submissions: number | null;
   timeout_seconds: number;
   memory_limit_mb: number;
@@ -18,6 +31,7 @@ export interface Exercise {
   published: boolean;
   tags: string | null;
   test_cases?: TestCaseResponse[];
+  rubric_dimensions?: RubricDimension[];
 }
 
 export interface TestCaseResponse {
@@ -34,6 +48,8 @@ export interface ExerciseCreate {
   description: string;
   template_code?: string;
   language?: string;
+  submission_type?: SubmissionType;
+  grading_mode?: GradingMode;
   max_submissions?: number;
   timeout_seconds?: number;
   memory_limit_mb?: number;
@@ -44,6 +60,7 @@ export interface ExerciseCreate {
   llm_grading_criteria?: string;
   published?: boolean;
   tags?: string;
+  rubric_dimensions?: RubricDimension[];
 }
 
 export interface TestCaseCreate {

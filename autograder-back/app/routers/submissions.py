@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 from app.database import get_db
 from app.auth.dependencies import get_current_user
 from app.models.user import User, UserRole
-from app.models.exercise import Exercise, ExerciseList, ExerciseListItem
+from app.models.exercise import Exercise, ExerciseList, ExerciseListItem, SubmissionType, GradingMode
 from app.models.class_models import ClassEnrollment
-from app.models.submission import Submission, SubmissionStatus
+from app.models.submission import Submission, SubmissionStatus, RubricScore
 from app.schemas.submissions import (
     SubmissionCreate,
     SubmissionResponse,
@@ -20,12 +20,23 @@ from app.schemas.submissions import (
     TestResultResponse,
     LLMEvaluationResponse,
     GradeResponse,
+    RubricScoreResponse,
 )
 from app.celery_app import celery_app
+from app.config import settings
 
 router = APIRouter(prefix="/submissions", tags=["submissions"])
 
-MAX_FILE_SIZE = 1 * 1024 * 1024  # 1MB
+MAX_FILE_SIZE = settings.max_submission_file_size_mb * 1024 * 1024
+
+ALLOWED_FILE_EXTENSIONS = {".pdf", ".xlsx", ".png", ".jpg", ".jpeg"}
+EXTENSION_TO_CONTENT_TYPE = {
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
 
 
 def validate_python_syntax(code: str) -> Optional[str]:
@@ -76,37 +87,31 @@ def check_deadline(db: Session, exercise_id: int, student_id: int) -> Optional[f
     Returns late penalty percentage to apply, or raises HTTPException if late submissions not allowed.
     Returns None if before deadline.
     """
-    # Find the exercise list containing this exercise for the student
     exercise_list_item = db.query(ExerciseListItem).join(ExerciseList).join(ClassEnrollment).filter(
         ExerciseListItem.exercise_id == exercise_id,
         ClassEnrollment.student_id == student_id
     ).first()
 
     if not exercise_list_item:
-        # Exercise not in any list, no deadline check
         return None
 
     exercise_list = exercise_list_item.exercise_list
     if not exercise_list.closes_at:
-        # No deadline set
         return None
 
     now = datetime.now(timezone.utc)
     if now <= exercise_list.closes_at:
-        # Before deadline
         return None
 
-    # After deadline
     if exercise_list.late_penalty_per_day is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Deadline has passed"
         )
 
-    # Calculate days late
     days_late = (now - exercise_list.closes_at).total_seconds() / (24 * 3600)
     penalty = exercise_list.late_penalty_per_day * days_late
-    return min(penalty, 100.0)  # Cap at 100%
+    return min(penalty, 100.0)
 
 
 @router.post("", response_model=SubmissionResponse, status_code=status.HTTP_201_CREATED)
@@ -119,48 +124,14 @@ async def create_submission(
 ):
     """
     Create a new submission (student only).
-    Accepts either code as text or uploaded file.
+    Accepts either code as text or uploaded file, depending on exercise submission_type.
     """
     # Only students can submit
     if current_user.role not in [UserRole.STUDENT, UserRole.TA]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only students can submit code"
+            detail="Only students can submit"
         )
-
-    # Validate input: must provide either code or file
-    if not code and not file:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Must provide either code text or file upload"
-        )
-
-    if code and file:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Provide either code text or file upload, not both"
-        )
-
-    # Read code from file if provided
-    if file:
-        # Validate file extension
-        if not file.filename.endswith('.py'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only .py files accepted"
-            )
-
-        # Read file content
-        content = await file.read()
-
-        # Validate file size
-        if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File exceeds 1MB limit"
-            )
-
-        code = content.decode('utf-8')
 
     # Validate exercise exists
     exercise = db.query(Exercise).filter(Exercise.id == exercise_id).first()
@@ -170,41 +141,127 @@ async def create_submission(
             detail="Exercise not found"
         )
 
-    # Validate Python syntax
-    syntax_error = validate_python_syntax(code)
-    if syntax_error:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=syntax_error
-        )
-
     # Check submission limit
     check_submission_limit(db, exercise, current_user.id)
 
-    # Check deadline and calculate penalty if applicable
+    # Check deadline
     late_penalty = check_deadline(db, exercise_id, current_user.id)
 
-    # Calculate code hash for LLM caching
-    code_hash = calculate_code_hash(code)
+    # Branch based on exercise submission_type
+    if exercise.submission_type == SubmissionType.FILE_UPLOAD:
+        # File upload submission
+        if code and not file:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This exercise requires file upload, not code text"
+            )
+        if not file:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File upload required for this exercise"
+            )
 
-    # Create submission record
-    submission = Submission(
-        exercise_id=exercise_id,
-        student_id=current_user.id,
-        code=code,
-        code_hash=code_hash,
-        status=SubmissionStatus.QUEUED
-    )
-    db.add(submission)
-    db.commit()
-    db.refresh(submission)
+        # Validate extension
+        import os
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in ALLOWED_FILE_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File type not allowed. Accepted: {', '.join(ALLOWED_FILE_EXTENSIONS)}"
+            )
 
-    # Enqueue submission task to Celery
-    celery_app.send_task(
-        'app.tasks.execute_submission',
-        args=[submission.id],
-        kwargs={'late_penalty': late_penalty or 0.0}
-    )
+        # Read content
+        file_content = await file.read()
+
+        # Validate size
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File exceeds {settings.max_submission_file_size_mb}MB limit"
+            )
+
+        content_hash = hashlib.sha256(file_content).hexdigest()
+        content_type = EXTENSION_TO_CONTENT_TYPE.get(ext, "application/octet-stream")
+
+        # Create submission first to get ID
+        submission = Submission(
+            exercise_id=exercise_id,
+            student_id=current_user.id,
+            code=None,
+            content_hash=content_hash,
+            file_name=file.filename,
+            file_size=len(file_content),
+            content_type=content_type,
+            status=SubmissionStatus.QUEUED,
+        )
+        db.add(submission)
+        db.flush()  # Get ID
+
+        # Save file to disk
+        from app.services.file_storage import save_submission_file
+        relative_path, _ = save_submission_file(exercise_id, submission.id, file, file_content)
+        submission.file_path = relative_path
+
+        db.commit()
+        db.refresh(submission)
+
+    else:
+        # Code submission (existing behavior)
+        if file and not code:
+            # Allow .py file upload for code exercises (existing behavior)
+            if not file.filename or not file.filename.endswith('.py'):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This exercise requires code submission. Only .py files accepted."
+                )
+            content = await file.read()
+            if len(content) > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"File exceeds {settings.max_submission_file_size_mb}MB limit"
+                )
+            code = content.decode('utf-8')
+
+        if not code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Code is required for this exercise"
+            )
+
+        # Validate Python syntax
+        syntax_error = validate_python_syntax(code)
+        if syntax_error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=syntax_error
+            )
+
+        content_hash = calculate_code_hash(code)
+
+        submission = Submission(
+            exercise_id=exercise_id,
+            student_id=current_user.id,
+            code=code,
+            content_hash=content_hash,
+            status=SubmissionStatus.QUEUED,
+        )
+        db.add(submission)
+        db.commit()
+        db.refresh(submission)
+
+    # Dispatch to correct Celery task based on grading_mode
+    if exercise.grading_mode == GradingMode.LLM_FIRST:
+        celery_app.send_task(
+            'app.tasks.grade_llm_first',
+            args=[submission.id],
+            kwargs={'late_penalty': late_penalty or 0.0}
+        )
+    else:
+        celery_app.send_task(
+            'app.tasks.execute_submission',
+            args=[submission.id],
+            kwargs={'late_penalty': late_penalty or 0.0}
+        )
 
     return submission
 
@@ -232,7 +289,6 @@ def list_submissions(
         query = query.filter(Submission.exercise_id == exercise_id)
 
     if student_id:
-        # Only professors can filter by student_id
         if current_user.role not in [UserRole.PROFESSOR, UserRole.ADMIN]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -240,7 +296,6 @@ def list_submissions(
             )
         query = query.filter(Submission.student_id == student_id)
 
-    # Order by most recent first
     query = query.order_by(Submission.submitted_at.desc())
 
     return query.all()
@@ -261,7 +316,6 @@ def get_submission(
             detail="Submission not found"
         )
 
-    # Check authorization
     if current_user.role == UserRole.STUDENT and submission.student_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -277,7 +331,7 @@ def get_submission_results(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get submission with test results and feedback"""
+    """Get submission with test results, LLM feedback, and rubric scores"""
     submission = db.query(Submission).filter(Submission.id == submission_id).first()
 
     if not submission:
@@ -286,18 +340,43 @@ def get_submission_results(
             detail="Submission not found"
         )
 
-    # Check authorization
     if current_user.role == UserRole.STUDENT and submission.student_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to view this submission"
         )
 
+    # Build rubric scores for llm-first exercises
+    rubric_scores = None
+    overall_feedback = None
+    exercise = db.query(Exercise).filter(Exercise.id == submission.exercise_id).first()
+
+    if exercise and exercise.grading_mode == GradingMode.LLM_FIRST:
+        raw_scores = (
+            db.query(RubricScore)
+            .filter(RubricScore.submission_id == submission.id)
+            .all()
+        )
+        if raw_scores:
+            rubric_scores = []
+            for rs in raw_scores:
+                dim = rs.dimension
+                rubric_scores.append(RubricScoreResponse(
+                    dimension_name=dim.name,
+                    dimension_weight=dim.weight,
+                    score=rs.score,
+                    feedback=rs.feedback,
+                ))
+        if submission.llm_evaluation:
+            overall_feedback = submission.llm_evaluation.feedback
+
     return SubmissionDetailResponse(
         submission=submission,
-        test_results=[TestResultResponse.model_validate(tr) for tr in submission.test_results],
+        test_results=[TestResultResponse.model_validate(tr) for tr in submission.test_results] if submission.test_results else None,
         llm_evaluation=LLMEvaluationResponse.model_validate(submission.llm_evaluation) if submission.llm_evaluation else None,
-        grade=GradeResponse.model_validate(submission.grade) if submission.grade else None
+        grade=GradeResponse.model_validate(submission.grade) if submission.grade else None,
+        rubric_scores=rubric_scores,
+        overall_feedback=overall_feedback,
     )
 
 
@@ -307,10 +386,7 @@ def get_submission_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Poll submission status for real-time updates.
-    Returns lightweight status response for polling.
-    """
+    """Poll submission status for real-time updates."""
     submission = db.query(Submission).filter(Submission.id == submission_id).first()
 
     if not submission:
@@ -319,7 +395,6 @@ def get_submission_status(
             detail="Submission not found"
         )
 
-    # Check authorization
     if current_user.role == UserRole.STUDENT and submission.student_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -341,11 +416,7 @@ def compare_submissions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Compare two submissions and return a unified diff.
-    Both submissions must belong to the current user (for students).
-    """
-    # Get both submissions
+    """Compare two code submissions and return a unified diff."""
     submission1 = db.query(Submission).filter(Submission.id == submission_id).first()
     submission2 = db.query(Submission).filter(Submission.id == comparison_submission_id).first()
 
@@ -355,7 +426,6 @@ def compare_submissions(
             detail="One or both submissions not found"
         )
 
-    # Check authorization
     if current_user.role == UserRole.STUDENT:
         if submission1.student_id != current_user.id or submission2.student_id != current_user.id:
             raise HTTPException(
@@ -363,7 +433,13 @@ def compare_submissions(
                 detail="Not authorized to view these submissions"
             )
 
-    # Generate unified diff
+    # Diff only works for code submissions
+    if not submission1.code or not submission2.code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Diff is only available for code submissions"
+        )
+
     diff_lines = list(difflib.unified_diff(
         submission1.code.splitlines(keepends=True),
         submission2.code.splitlines(keepends=True),
