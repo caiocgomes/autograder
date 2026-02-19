@@ -91,6 +91,31 @@ services:
           action: sync+restart
           target: /app
 
+  # Discord Bot
+  discord-bot:
+    build:
+      context: ./autograder-back
+      dockerfile: Dockerfile.dev
+    container_name: autograder-discord-bot
+    command: python -m app.discord_bot
+    volumes:
+      - ./autograder-back:/app
+    environment:
+      DATABASE_URL: postgresql://autograder:autograder@db:5432/autograder
+      REDIS_URL: redis://redis:6379/0
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      DISCORD_REGISTRATION_CHANNEL_ID: ${DISCORD_REGISTRATION_CHANNEL_ID:-}
+      DISCORD_ENABLED: ${DISCORD_ENABLED:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - discord  # Only start with: docker compose --profile discord up
+
 volumes:
   postgres_data:
   redis_data:

@@ -1,8 +1,14 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Index, UniqueConstraint
+import enum
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Index, UniqueConstraint, Enum
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
 from .base import Base
+
+
+class EnrollmentSource(str, enum.Enum):
+    MANUAL = "manual"
+    PRODUCT = "product"
 
 
 class Class(Base):
@@ -35,6 +41,7 @@ class ClassEnrollment(Base):
     class_id = Column(Integer, ForeignKey("classes.id"), nullable=False)
     student_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     enrolled_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    enrollment_source = Column(Enum(EnrollmentSource), nullable=False, default=EnrollmentSource.MANUAL)
 
     # Relationships
     class_ = relationship("Class", back_populates="enrollments")

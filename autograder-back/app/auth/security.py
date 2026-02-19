@@ -1,21 +1,27 @@
+import base64
+import hashlib
+import bcrypt as _bcrypt
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from app.config import settings
 
-# Password hashing context with bcrypt
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=settings.bcrypt_cost_factor)
+
+def _prehash(password: str) -> bytes:
+    """SHA-256 prehash → 44 bytes base64, keeps any password within bcrypt's 72-byte limit."""
+    digest = hashlib.sha256(password.encode("utf-8")).digest()
+    return base64.b64encode(digest)
 
 
 def hash_password(password: str) -> str:
-    """Hash password using bcrypt with configured cost factor"""
-    return pwd_context.hash(password)
+    """Hash password using bcrypt directly (bypasses passlib/bcrypt 5.x incompatibility)."""
+    salt = _bcrypt.gensalt(rounds=settings.bcrypt_cost_factor)
+    return _bcrypt.hashpw(_prehash(password), salt).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password against hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify password against hash."""
+    return _bcrypt.checkpw(_prehash(plain_password), hashed_password.encode("utf-8"))
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

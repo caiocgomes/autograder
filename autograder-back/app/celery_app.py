@@ -1,5 +1,6 @@
 import os
 from celery import Celery
+from celery.schedules import crontab
 
 # Redis URL for broker and result backend
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -25,3 +26,16 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,  # Process one task at a time per worker
     worker_max_tasks_per_child=100,  # Restart worker after 100 tasks to prevent memory leaks
 )
+
+celery_app.conf.beat_schedule = {
+    "hotmart-sync-hourly": {
+        "task": "sync_hotmart_students",
+        "schedule": crontab(minute=0),  # every hour on the hour
+        "args": [],
+    },
+    "manychat-tag-sync-daily": {
+        "task": "sync_manychat_tags",
+        "schedule": crontab(hour=2, minute=0),  # 02:00 UTC daily
+        "args": [],
+    },
+}

@@ -19,6 +19,8 @@ from app.auth.security import (
     verify_token,
 )
 from app.auth.rate_limiter import rate_limiter
+from app.config import settings
+from app.integrations import manychat
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -41,13 +43,21 @@ async def register(user_data: UserRegister, db: Session = Depends(get_db)):
         password_hash=hashed_password,
         role=UserRole.STUDENT  # Default role
     )
+
+    if user_data.whatsapp_number:
+        new_user.whatsapp_number = user_data.whatsapp_number
+        if settings.manychat_enabled:
+            subscriber_id = manychat.find_subscriber(user_data.whatsapp_number)
+            if subscriber_id:
+                new_user.manychat_subscriber_id = subscriber_id
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
     # Generate tokens
-    access_token = create_access_token({"sub": new_user.id})
-    refresh_token = create_refresh_token({"sub": new_user.id})
+    access_token = create_access_token({"sub": str(new_user.id)})
+    refresh_token = create_refresh_token({"sub": str(new_user.id)})
 
     # TODO: Send confirmation email
 
@@ -85,8 +95,8 @@ async def login(credentials: UserLogin, db: Session = Depends(get_db)):
     rate_limiter.reset(credentials.email)
 
     # Generate tokens
-    access_token = create_access_token({"sub": user.id})
-    refresh_token = create_refresh_token({"sub": user.id})
+    access_token = create_access_token({"sub": str(user.id)})
+    refresh_token = create_refresh_token({"sub": str(user.id)})
 
     return TokenResponse(
         access_token=access_token,
@@ -113,7 +123,7 @@ async def refresh(request: RefreshTokenRequest, db: Session = Depends(get_db)):
         )
 
     # Verify user still exists
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == int(user_id)).first()
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -121,8 +131,8 @@ async def refresh(request: RefreshTokenRequest, db: Session = Depends(get_db)):
         )
 
     # Generate new tokens (optional: rotate refresh token)
-    access_token = create_access_token({"sub": user_id})
-    new_refresh_token = create_refresh_token({"sub": user_id})
+    access_token = create_access_token({"sub": str(user_id)})
+    new_refresh_token = create_refresh_token({"sub": str(user_id)})
 
     return TokenResponse(
         access_token=access_token,
@@ -139,7 +149,7 @@ async def request_password_reset(request: PasswordResetRequest, db: Session = De
     # If user exists, send reset email
     if user:
         # Generate reset token (short-lived JWT)
-        reset_token = create_access_token({"sub": user.id, "purpose": "password_reset"})
+        reset_token = create_access_token({"sub": str(user.id), "purpose": "password_reset"})
         # TODO: Send email with reset link containing token
         # Email should contain link like: https://frontend.com/reset-password?token={reset_token}
         pass

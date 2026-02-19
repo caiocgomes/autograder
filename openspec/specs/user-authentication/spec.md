@@ -92,3 +92,29 @@ The system SHALL allow users to view and update their profile information.
 #### Scenario: Update password
 - **WHEN** user submits current password and new password
 - **THEN** system verifies current password, hashes new password, and updates
+
+## ADDED Requirements (orchestrator integration)
+
+### Requirement: Extended user model for integrations
+The User model SHALL include fields for external service linking.
+
+#### Data model additions
+- `hotmart_id`: string, nullable, unique — Hotmart buyer identifier (email)
+- `discord_id`: string, nullable, unique — Discord user snowflake ID
+- `whatsapp_number`: string, nullable — E.164 format phone number
+- `lifecycle_status`: enum (pending_payment, pending_onboarding, active, churned), nullable — null for manually-created users (professors, admins)
+- `onboarding_token`: string, nullable, unique — token for Discord registration
+- `onboarding_token_expires_at`: timestamp, nullable
+- `manychat_subscriber_id`: string, nullable — cached ManyChat subscriber ID
+
+### Requirement: Automated account creation via webhook
+The system SHALL create user accounts automatically when Hotmart purchase is confirmed.
+
+#### Scenario: Auto-create student on purchase
+- **WHEN** Hotmart webhook triggers student creation
+- **THEN** system creates User with role=student, hotmart_id set, lifecycle_status=pending_onboarding, and generates onboarding_token
+- **AND** password is set to a random value (student resets via email or never uses web login if Discord-only)
+
+#### Scenario: Existing user re-purchases
+- **WHEN** Hotmart webhook arrives for email that already exists in system
+- **THEN** system updates lifecycle_status and triggers reactivation (does not create duplicate)

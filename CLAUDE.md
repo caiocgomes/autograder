@@ -11,7 +11,7 @@ Autograder is a monorepo for automated code grading with sandboxed execution and
 
 ## Commands
 
-### Backend (run from `autograder-back/`)
+### Backend (run from `autograder-back/` — all `uv run` commands require this cwd)
 
 ```bash
 uv sync --all-extras                                          # Install deps
@@ -36,9 +36,17 @@ npm run lint       # ESLint
 
 ```bash
 docker compose up -d                                          # Start Postgres + Redis + backend + worker
+docker compose --profile discord up -d                        # Also start Discord bot
 docker compose logs -f backend                                # Follow backend logs
 docker compose logs -f worker                                 # Follow worker logs
+docker compose logs -f discord-bot                            # Follow Discord bot logs
 docker build -f Dockerfile.sandbox -t autograder-sandbox .    # Build sandbox image (required for code execution)
+```
+
+### Discord bot (run from `autograder-back/`)
+
+```bash
+uv run python -m app.discord_bot                              # Start Discord bot locally
 ```
 
 Production: `docker compose -f docker-compose.prod.yml up -d` (adds nginx, db-backup, SSL)
@@ -61,13 +69,15 @@ The sandbox Docker client has a macOS fallback socket path (`~/.docker/run/docke
 
 ### Backend Layers
 
-- **Routers** (`app/routers/`): FastAPI endpoints. Auth, users, classes, exercises, exercise_lists, submissions, grades.
-- **Models** (`app/models/`): SQLAlchemy ORM. Key entities: User (roles: admin/professor/student/ta), Class, ClassEnrollment, Group, Exercise, ExerciseList, Submission, TestResult, Grade, LLMEvaluation.
+- **Routers** (`app/routers/`): FastAPI endpoints. Auth, users, classes, exercises, exercise_lists, submissions, grades, webhooks, products, admin_events.
+- **Models** (`app/models/`): SQLAlchemy ORM. Key entities: User (roles: admin/professor/student/ta; lifecycle_status: pending_payment/pending_onboarding/active/churned), Class, ClassEnrollment (enrollment_source: manual/product), Group, Exercise, ExerciseList, Submission, TestResult, Grade, LLMEvaluation, Product, ProductAccessRule, Event.
 - **Schemas** (`app/schemas/`): Pydantic request/response models.
 - **Auth** (`app/auth/`): JWT tokens (access 15min, refresh 7 days), bcrypt password hashing, RBAC via `require_role()` dependency, Redis-backed rate limiting on login.
-- **Services** (`app/services/`): Extracted business logic (grading calculations). Legacy `services/` at repo root has grader/sandbox/llm_validator used by the original single-endpoint flow.
-- **Tasks** (`app/tasks.py`): Celery async tasks for execution, grading, LLM evaluation.
-- **Config** (`app/config.py`): Pydantic Settings loading from `.env`. All config via environment variables.
+- **Services** (`app/services/`): Extracted business logic. `lifecycle.py`: state machine (pending_payment→pending_onboarding→active→churned) with side-effects. `enrollment.py`: auto-enroll/unenroll by product, preserving manual enrollments. `notifications.py`: Discord + ManyChat notifications.
+- **Integrations** (`app/integrations/`): `hotmart.py` (HMAC validation, payload parsing), `discord.py` (role management via REST), `manychat.py` (tags, flows, subscriber resolution).
+- **Tasks** (`app/tasks.py`): Celery async tasks for execution, grading, LLM evaluation, `process_hotmart_event`, `execute_side_effect`.
+- **Discord bot** (`app/discord_bot.py`): Separate worker. `/registrar` slash command, `on_member_join` handler. Run as standalone process.
+- **Config** (`app/config.py`): Pydantic Settings loading from `.env`. All config via environment variables. Feature flags: `HOTMART_WEBHOOK_ENABLED`, `DISCORD_ENABLED`, `MANYCHAT_ENABLED`.
 
 ### Frontend Layers
 
@@ -93,7 +103,15 @@ PostgreSQL 16 via SQLAlchemy. Alembic migrations in `autograder-back/alembic/`. 
 
 ## Testing
 
-Backend tests use FastAPI's `TestClient` with dependency overrides. `conftest.py` provides fixtures that swap `get_db` and `get_current_user` with mocks, so tests run without a real database. Test files: `test_auth_router.py`, `test_class_router.py`, `test_exercise_router.py`, `test_sandbox_integration.py`, `test_grading_logic.py`.
+Backend tests use FastAPI's `TestClient` with dependency overrides. `conftest.py` provides fixtures that swap `get_db` and `get_current_user` with mocks, so tests run without a real database. There are 22 test files covering all routers, services, and integrations.
+
+### Mock DB chain pattern
+
+The `mock_db` fixture chains all calls back to itself (`query.return_value = db`, `filter.return_value = db`), so `.query(...).filter(...).first()` all flow through the same object. Two critical gotchas:
+
+1. **Multiple `.first()` calls in one endpoint**: Using `mock_db.query.return_value.filter.return_value.first.return_value = x` makes every `.first()` in that request return `x`. If an endpoint calls `.first()` twice (e.g., fetch object, then check for duplicate), use `side_effect=[x, None]` instead.
+
+2. **SQLAlchemy server-side defaults**: When an endpoint creates an ORM object (`Class(name=..., professor_id=...)`) and calls `db.refresh(obj)`, fields with `server_default` (e.g., `created_at = Column(..., server_default=func.now())`) and sometimes `default` columns stay `None` in-memory because no real INSERT occurs. The `db.refresh` mock must explicitly set those fields via `side_effect=lambda obj: (setattr(obj, 'created_at', datetime(...)), ...)`.
 
 No frontend tests exist yet.
 

@@ -69,6 +69,30 @@ class Settings(BaseSettings):
     debug: bool = True
     base_dir: Path = Path(__file__).parent.parent
 
+    # Hotmart integration
+    hotmart_hottok: str = ""
+    hotmart_webhook_enabled: bool = False
+    hotmart_client_id: str = ""
+    hotmart_client_secret: str = ""
+    hotmart_api_base: str = "https://developers.hotmart.com/payments/api/v1"
+    hotmart_token_url: str = "https://api-sec-vlc.hotmart.com/security/oauth/token"
+
+    # Discord integration
+    discord_bot_token: str = ""
+    discord_guild_id: str = ""
+    discord_registration_channel_id: str = ""
+    discord_enabled: bool = False
+
+    # ManyChat integration
+    manychat_api_token: str = ""
+    manychat_enabled: bool = False
+    manychat_onboarding_flow_id: str = ""
+    manychat_welcome_flow_id: str = ""
+    manychat_churn_flow_id: str = ""
+    manychat_welcome_back_flow_id: str = ""
+    manychat_new_assignment_flow_id: str = ""
+    manychat_deadline_reminder_flow_id: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         if self.cors_origins == "*":

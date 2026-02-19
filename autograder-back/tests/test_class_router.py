@@ -1,5 +1,6 @@
 """Tests for class management endpoints (Task 16.2)"""
 import pytest
+from datetime import datetime
 from unittest.mock import Mock, MagicMock, patch
 from app.models.user import User, UserRole
 from app.models.class_models import Class, ClassEnrollment
@@ -8,7 +9,12 @@ from app.models.class_models import Class, ClassEnrollment
 class TestCreateClass:
     def test_create_class_as_professor(self, client_with_professor):
         client, mock_db, professor = client_with_professor
-        mock_db.refresh = Mock(side_effect=lambda c: (setattr(c, 'id', 1), setattr(c, 'invite_code', 'ABC123')))
+        mock_db.refresh = Mock(side_effect=lambda c: (
+            setattr(c, 'id', 1),
+            setattr(c, 'invite_code', 'ABC123'),
+            setattr(c, 'archived', False),
+            setattr(c, 'created_at', datetime(2024, 1, 1)),
+        ))
 
         response = client.post("/classes", json={"name": "Data Science 101"})
         assert response.status_code == 201
@@ -69,7 +75,8 @@ class TestEnrollment:
         mock_class = Mock(spec=Class)
         mock_class.id = 1
         mock_class.invite_code = "VALID_CODE"
-        mock_db.query.return_value.filter.return_value.first.return_value = mock_class
+        # First .first() returns the class; second .first() returns None (not yet enrolled)
+        mock_db.query.return_value.filter.return_value.first.side_effect = [mock_class, None]
 
         response = client.post("/classes/1/enroll", json={"invite_code": "VALID_CODE"})
         # Should succeed (200 or 201)
@@ -91,8 +98,11 @@ class TestArchiveClass:
         client, mock_db, professor = client_with_professor
         mock_class = Mock(spec=Class)
         mock_class.id = 1
+        mock_class.name = "Test Class"
         mock_class.professor_id = professor.id
+        mock_class.invite_code = "ABC123"
         mock_class.archived = False
+        mock_class.created_at = datetime(2024, 1, 1)
         mock_db.query.return_value.filter.return_value.first.return_value = mock_class
 
         response = client.patch("/classes/1/archive")

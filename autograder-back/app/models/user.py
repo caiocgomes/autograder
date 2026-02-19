@@ -14,6 +14,13 @@ class UserRole(str, enum.Enum):
     TA = "ta"
 
 
+class LifecycleStatus(str, enum.Enum):
+    PENDING_PAYMENT = "pending_payment"
+    PENDING_ONBOARDING = "pending_onboarding"
+    ACTIVE = "active"
+    CHURNED = "churned"
+
+
 class User(Base):
     """User model for authentication and authorization"""
     __tablename__ = "users"
@@ -23,6 +30,15 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(Enum(UserRole), nullable=False, default=UserRole.STUDENT)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Integration fields for lifecycle management
+    hotmart_id = Column(String(255), unique=True, nullable=True, index=True)
+    discord_id = Column(String(255), unique=True, nullable=True, index=True)
+    whatsapp_number = Column(String(20), nullable=True)
+    lifecycle_status = Column(Enum(LifecycleStatus), nullable=True)
+    onboarding_token = Column(String(16), unique=True, nullable=True, index=True)
+    onboarding_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    manychat_subscriber_id = Column(String(255), nullable=True)
 
     # Relationships
     classes_taught = relationship("Class", back_populates="professor", foreign_keys="Class.professor_id")

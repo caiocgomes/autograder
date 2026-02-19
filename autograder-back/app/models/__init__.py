@@ -1,7 +1,7 @@
 # Database models
 from .base import Base
-from .user import User, UserRole
-from .class_models import Class, ClassEnrollment, Group, GroupMembership
+from .user import User, UserRole, LifecycleStatus
+from .class_models import Class, ClassEnrollment, Group, GroupMembership, EnrollmentSource
 from .exercise import (
     Exercise,
     TestCase,
@@ -20,15 +20,20 @@ from .submission import (
     SubmissionStatus,
     RubricScore,
 )
+from .product import Product, ProductAccessRule, AccessRuleType
+from .event import Event, EventStatus
+from .student_course_status import StudentCourseStatus
 
 __all__ = [
     "Base",
     "User",
     "UserRole",
+    "LifecycleStatus",
     "Class",
     "ClassEnrollment",
     "Group",
     "GroupMembership",
+    "EnrollmentSource",
     "Exercise",
     "TestCase",
     "ExerciseList",
@@ -43,4 +48,10 @@ __all__ = [
     "Grade",
     "SubmissionStatus",
     "RubricScore",
+    "Product",
+    "ProductAccessRule",
+    "AccessRuleType",
+    "Event",
+    "EventStatus",
+    "StudentCourseStatus",
 ]

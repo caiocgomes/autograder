@@ -3,9 +3,12 @@ Celery tasks for async processing
 
 Tasks:
 - execute_submission: Run student code in Docker sandbox
+- process_hotmart_event: Parse webhook and trigger lifecycle transition
+- execute_side_effect: Re-execute a failed side-effect with retry
 - grade_submission: Calculate test scores and trigger LLM grading
 - llm_evaluate: Call LLM API for qualitative feedback
 """
+import json
 import os
 import tempfile
 import docker
@@ -42,7 +45,8 @@ def truncate_output(text: str, max_size: int = MAX_OUTPUT_SIZE) -> str:
     """Truncate output if it exceeds max size"""
     if len(text) <= max_size:
         return text
-    return text[:max_size] + "\n... [Output truncated]"
+    suffix = "\n... [Output truncated]"
+    return text[:max_size - len(suffix)] + suffix
 
 
 def create_test_harness(test_cases: List[TestCase], student_code: str) -> str:
@@ -954,6 +958,478 @@ def grade_llm_first(self, submission_id: int, late_penalty: float = 0.0):
             submission.error_message = f"LLM grading failed after {self.max_retries} retries: {str(e)}"
             db.commit()
 
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Course Orchestrator Tasks
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(name="app.tasks.process_hotmart_event", bind=True, max_retries=1)
+def process_hotmart_event(self, event_id: int, payload: dict):
+    """
+    Parse a Hotmart webhook event and trigger the appropriate lifecycle transition.
+    Runs async to keep the webhook endpoint fast.
+    """
+    from app.integrations.hotmart import parse_payload, PURCHASE_APPROVED, PURCHASE_DELAYED, PURCHASE_REFUNDED, SUBSCRIPTION_CANCELLATION
+    from app.models.event import Event, EventStatus
+    from app.models.user import User, UserRole, LifecycleStatus
+    from app.services.lifecycle import transition
+    import secrets
+
+    db = SessionLocal()
+    try:
+        event = db.query(Event).filter(Event.id == event_id).first()
+        if not event:
+            return {"error": f"Event {event_id} not found"}
+
+        parsed = parse_payload(payload)
+        if not parsed:
+            event.status = EventStatus.FAILED
+            event.error_message = "Failed to parse Hotmart payload"
+            db.commit()
+            return {"error": "parse_failure"}
+
+        # Resolve or create student
+        user = db.query(User).filter(User.hotmart_id == parsed.buyer_email).first()
+        if not user:
+            user = db.query(User).filter(User.email == parsed.buyer_email).first()
+
+        trigger_map = {
+            PURCHASE_APPROVED: "purchase_approved",
+            PURCHASE_DELAYED: "purchase_delayed",
+            PURCHASE_REFUNDED: "purchase_refunded",
+            SUBSCRIPTION_CANCELLATION: "subscription_cancelled",
+        }
+        trigger = trigger_map.get(parsed.event_type)
+        if not trigger:
+            event.status = EventStatus.IGNORED
+            db.commit()
+            return {"status": "ignored"}
+
+        if not user and trigger in ("purchase_approved", "purchase_delayed"):
+            # Auto-create student account
+            from app.auth.security import hash_password
+            user = User(
+                email=parsed.buyer_email,
+                password_hash=hash_password(secrets.token_urlsafe(16)),
+                role=UserRole.STUDENT,
+                hotmart_id=parsed.buyer_email,
+                lifecycle_status=None,
+            )
+            db.add(user)
+            db.flush()
+
+        if not user:
+            event.status = EventStatus.FAILED
+            event.error_message = f"Student not found for email: {parsed.buyer_email}"
+            db.commit()
+            return {"error": "student_not_found"}
+
+        result = transition(
+            db,
+            user,
+            trigger=trigger,
+            hotmart_product_id=parsed.hotmart_product_id,
+        )
+
+        if result is None:
+            event.status = EventStatus.IGNORED
+            event.error_message = f"No valid transition from {user.lifecycle_status} with trigger {trigger}"
+        else:
+            event.target_id = user.id
+            event.status = EventStatus.PROCESSED
+
+        db.commit()
+        return {"status": str(result), "user_id": user.id}
+
+    except Exception as e:
+        db.rollback()
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=e, countdown=30)
+        # Mark event as failed
+        try:
+            event = db.query(Event).filter(Event.id == event_id).first()
+            if event:
+                event.status = EventStatus.FAILED
+                event.error_message = str(e)
+                db.commit()
+        except Exception:
+            pass
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.execute_side_effect", bind=True, max_retries=1)
+def execute_side_effect(self, event_id: int):
+    """
+    Re-execute a failed side-effect identified by event_id.
+    Used by the admin manual retry endpoint.
+    """
+    from app.models.event import Event, EventStatus
+    from app.models.user import User
+
+    db = SessionLocal()
+    try:
+        event = db.query(Event).filter(Event.id == event_id).first()
+        if not event:
+            return {"error": f"Event {event_id} not found"}
+
+        if event.status != EventStatus.FAILED:
+            return {"status": "skipped", "reason": "Event not in failed state"}
+
+        # Re-dispatch based on event type
+        event_type = event.type
+        payload = event.payload or {}
+        target_user = db.query(User).filter(User.id == event.target_id).first() if event.target_id else None
+
+        success = False
+
+        if event_type == "discord.role_assigned" and target_user and target_user.discord_id:
+            from app.integrations.discord import assign_role
+            success = assign_role(target_user.discord_id, payload.get("role_id", ""))
+
+        elif event_type == "discord.role_revoked" and target_user and target_user.discord_id:
+            from app.integrations.discord import revoke_role
+            success = revoke_role(target_user.discord_id, payload.get("role_id", ""))
+
+        elif event_type == "manychat.tag_added" and target_user and target_user.manychat_subscriber_id:
+            from app.integrations.manychat import add_tag
+            success = add_tag(target_user.manychat_subscriber_id, payload.get("tag", ""))
+
+        elif event_type == "manychat.tag_removed" and target_user and target_user.manychat_subscriber_id:
+            from app.integrations.manychat import remove_tag
+            success = remove_tag(target_user.manychat_subscriber_id, payload.get("tag", ""))
+
+        elif event_type == "manychat.flow_triggered" and target_user and target_user.manychat_subscriber_id:
+            from app.integrations.manychat import trigger_flow
+            from app.config import settings
+            flow_map = {
+                "onboarding": settings.manychat_onboarding_flow_id,
+                "welcome-confirmed": settings.manychat_welcome_flow_id,
+                "churn-notification": settings.manychat_churn_flow_id,
+                "welcome-back": settings.manychat_welcome_back_flow_id,
+            }
+            flow_id = flow_map.get(payload.get("flow", ""), "")
+            success = trigger_flow(target_user.manychat_subscriber_id, flow_id)
+
+        else:
+            return {"status": "skipped", "reason": f"No handler for event type: {event_type}"}
+
+        if success:
+            event.status = EventStatus.PROCESSED
+            event.error_message = None
+            db.commit()
+            return {"status": "success"}
+        else:
+            return {"status": "failed", "reason": "Side-effect returned False"}
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+@celery_app.task(name="sync_hotmart_students", bind=True, max_retries=0)
+def sync_hotmart_students(self, product_id=None):
+    """
+    Reconcile active Hotmart buyers with local user records.
+
+    Iterates active subscriptions and sales, creates missing users, and
+    transitions each to the appropriate lifecycle state. Idempotent: users
+    already active are silently skipped.
+    """
+    from app.integrations import hotmart
+    from app.models.event import Event, EventStatus
+    from app.models.user import User, UserRole
+    from app.services.lifecycle import transition
+    from app.auth.security import hash_password
+    import secrets
+
+    db = SessionLocal()
+    try:
+        # Collect all active buyers with phone numbers (from sales/users endpoint)
+        phones: dict = {}  # email -> phone
+        for item in hotmart.list_buyers_with_phone(product_id):
+            email = item.get("email", "").lower().strip()
+            phone = item.get("phone", "")
+            if email and phone:
+                phones[email] = phone
+
+        # Collect all active buyers, deduplicated by email
+        seen: dict = {}  # email -> hotmart_product_id (last one wins)
+
+        for item in hotmart.list_active_subscriptions(product_id):
+            email = item.get("email", "").lower().strip()
+            if email:
+                seen[email] = item.get("hotmart_product_id", "")
+
+        for item in hotmart.list_active_sales(product_id):
+            email = item.get("email", "").lower().strip()
+            if email and email not in seen:
+                seen[email] = item.get("hotmart_product_id", "")
+
+        synced = 0
+        created = 0
+        already_active = 0
+
+        for email, hpid in seen.items():
+            try:
+                user = db.query(User).filter(User.hotmart_id == email).first()
+                if not user:
+                    user = db.query(User).filter(User.email == email).first()
+
+                if not user:
+                    user = User(
+                        email=email,
+                        password_hash=hash_password(secrets.token_urlsafe(16)),
+                        role=UserRole.STUDENT,
+                        hotmart_id=email,
+                        lifecycle_status=None,
+                    )
+                    db.add(user)
+                    db.flush()
+                    created += 1
+                elif not user.hotmart_id:
+                    user.hotmart_id = email
+
+                # Populate whatsapp_number from Hotmart if not set
+                phone = phones.get(email, "")
+                if phone and not user.whatsapp_number:
+                    user.whatsapp_number = phone
+
+                result = transition(
+                    db,
+                    user,
+                    trigger="purchase_approved",
+                    hotmart_product_id=hpid,
+                )
+
+                if result is None:
+                    already_active += 1
+                else:
+                    synced += 1
+
+                db.commit()
+
+            except Exception as e:
+                db.rollback()
+                import logging
+                logging.getLogger(__name__).error(
+                    "sync_hotmart_students: failed to process %s: %s", email, e
+                )
+
+        # Log completion event
+        log_event = Event(
+            type="hotmart.sync_completed",
+            payload={
+                "synced": synced,
+                "created": created,
+                "already_active": already_active,
+                "total_fetched": len(seen),
+                "product_id": product_id,
+            },
+            status=EventStatus.PROCESSED,
+        )
+        db.add(log_event)
+        db.commit()
+
+        return {
+            "status": "ok",
+            "synced": synced,
+            "created": created,
+            "already_active": already_active,
+            "total_fetched": len(seen),
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+# ---------------------------------------------------------------------------
+# ManyChat Tag Sync Helpers
+# ---------------------------------------------------------------------------
+
+_MANYCHAT_STATUSES = ["Ativo", "Inadimplente", "Cancelado", "Reembolsado"]
+
+
+def _update_scd2(user_id: int, product_id: int, new_status: str, source: str, db) -> bool:
+    """
+    Update StudentCourseStatus SCD Type 2 for (user_id, product_id).
+    Returns True if a status change occurred, False if no-op (same status).
+    """
+    from app.models.student_course_status import StudentCourseStatus
+    import datetime as _dt
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    current = (
+        db.query(StudentCourseStatus)
+        .filter(
+            StudentCourseStatus.user_id == user_id,
+            StudentCourseStatus.product_id == product_id,
+            StudentCourseStatus.is_current == True,
+        )
+        .first()
+    )
+
+    if current and current.status == new_status:
+        return False
+
+    if current:
+        current.valid_to = now
+        current.is_current = False
+
+    db.add(StudentCourseStatus(
+        user_id=user_id,
+        product_id=product_id,
+        status=new_status,
+        valid_from=now,
+        valid_to=None,
+        is_current=True,
+        source=source,
+    ))
+    return True
+
+
+def _apply_manychat_tags(subscriber_id: str, course_name: str, new_status: str):
+    """
+    Brute-force update ManyChat tags for a course.
+    Removes all possible status tags then adds course tag + current status tag.
+    """
+    from app.integrations import manychat
+    for status in _MANYCHAT_STATUSES:
+        manychat.remove_tag(subscriber_id, f"{course_name}, {status}")
+    manychat.add_tag(subscriber_id, course_name)
+    manychat.add_tag(subscriber_id, f"{course_name}, {new_status}")
+
+
+@celery_app.task(name="sync_manychat_tags", bind=True, max_retries=0)
+def sync_manychat_tags(self, product_id=None):
+    """
+    Reconcile ManyChat tags for all (or one) Hotmart products.
+
+    For each product with MANYCHAT_TAG ProductAccessRules:
+    1. Fetch buyer statuses from Hotmart (6-year history)
+    2. Match to User records in DB
+    3. Update student_course_status (SCD Type 2)
+    4. Apply dual tags in ManyChat: {Course} + {Course}, {Status}
+    5. Derived access rules are expanded via ProductAccessRule config
+    """
+    import logging as _logging
+    from app.integrations import hotmart, manychat
+    from app.models.event import Event, EventStatus
+    from app.models.user import User
+    from app.models.product import Product, ProductAccessRule, AccessRuleType
+
+    _log = _logging.getLogger(__name__)
+    db = SessionLocal()
+
+    try:
+        query = db.query(Product).filter(Product.is_active == True)
+        if product_id:
+            query = query.filter(Product.id == product_id)
+        products = query.all()
+
+        counters = {
+            "synced": 0,
+            "status_changes": 0,
+            "skipped_no_phone": 0,
+            "skipped_no_subscriber": 0,
+            "skipped_error": 0,
+        }
+
+        for product in products:
+            tag_rules = [
+                r.rule_value
+                for r in product.access_rules
+                if r.rule_type == AccessRuleType.MANYCHAT_TAG
+            ]
+            if not tag_rules:
+                continue
+
+            try:
+                buyer_statuses = hotmart.get_buyer_statuses(str(product.hotmart_product_id))
+            except Exception as e:
+                _log.error("Failed to fetch buyer statuses for product %s: %s", product.id, e)
+                continue
+
+            for email, biz_status in buyer_statuses.items():
+                try:
+                    user = db.query(User).filter(
+                        (User.hotmart_id == email) | (User.email == email)
+                    ).first()
+                    if not user:
+                        continue
+
+                    # Update SCD2 for each course tag (direct + derived)
+                    for course_name in tag_rules:
+                        tag_product = (
+                            db.query(Product)
+                            .join(ProductAccessRule)
+                            .filter(
+                                ProductAccessRule.rule_type == AccessRuleType.MANYCHAT_TAG,
+                                ProductAccessRule.rule_value == course_name,
+                                Product.is_active == True,
+                            )
+                            .first()
+                        ) or product
+
+                        changed = _update_scd2(
+                            user.id, tag_product.id, biz_status, "hotmart_sync", db
+                        )
+                        if changed:
+                            counters["status_changes"] += 1
+
+                    if not user.whatsapp_number:
+                        counters["skipped_no_phone"] += 1
+                        db.commit()
+                        continue
+
+                    subscriber_id = user.manychat_subscriber_id
+                    if not subscriber_id:
+                        subscriber_id = manychat.find_subscriber(user.whatsapp_number)
+                        if subscriber_id:
+                            user.manychat_subscriber_id = subscriber_id
+                        else:
+                            counters["skipped_no_subscriber"] += 1
+                            db.commit()
+                            continue
+
+                    for course_name in tag_rules:
+                        _apply_manychat_tags(subscriber_id, course_name, biz_status)
+
+                    counters["synced"] += 1
+                    db.commit()
+
+                except Exception as e:
+                    db.rollback()
+                    _log.error("sync_manychat_tags: error for %s / product %s: %s",
+                               email, product.id, e)
+                    counters["skipped_error"] += 1
+
+        db.add(Event(
+            type="manychat.sync_completed",
+            payload={**counters, "product_id": product_id},
+            status=EventStatus.PROCESSED,
+        ))
+        db.commit()
+
+        return {"status": "ok", **counters}
+
+    except Exception as e:
+        db.rollback()
         return {"error": str(e)}
 
     finally:
