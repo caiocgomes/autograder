@@ -63,7 +63,7 @@ info "DB e Redis ok"
 step "4/7 Rodando migrations"
 # -----------------------------------------------------------------------------
 APP_PORT=$APP_PORT docker compose -f docker-compose.prod.yml run --rm \
-    --entrypoint "uv run alembic upgrade head" backend
+    --entrypoint "python -m alembic upgrade head" backend
 info "Migrations ok"
 
 # -----------------------------------------------------------------------------
@@ -85,7 +85,7 @@ fi
 step "6/7 Setup de dados (produtos e access rules)"
 # -----------------------------------------------------------------------------
 APP_PORT=$APP_PORT docker compose -f docker-compose.prod.yml exec backend \
-    uv run python scripts/setup_product_access_rules.py
+    python scripts/setup_product_access_rules.py
 info "ProductAccessRules configuradas"
 
 # -----------------------------------------------------------------------------
