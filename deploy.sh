@@ -39,9 +39,13 @@ for placeholder in "your-secret-key-here" "your-hotmart-webhook-secret" "your-di
 done
 info ".env ok"
 
-# Corrigir DATABASE_URL e REDIS_URL para apontar para os containers
-sed -i 's|DATABASE_URL=postgresql://.*@localhost|DATABASE_URL=postgresql://autograder:'"$(grep POSTGRES_PASSWORD "$ENV_FILE" | cut -d= -f2)"'@db|' "$ENV_FILE" 2>/dev/null || true
-sed -i 's|REDIS_URL=redis://\(:.*@\)\?localhost|REDIS_URL=redis://:'"$(grep ^REDIS_PASSWORD "$ENV_FILE" | cut -d= -f2)"'@redis|' "$ENV_FILE" 2>/dev/null || true
+# Validar que DATABASE_URL e REDIS_URL apontam para os containers Docker
+if grep -q "@localhost" "$ENV_FILE" || grep -q "@127.0.0.1" "$ENV_FILE"; then
+    warn "ATENÇÃO: DATABASE_URL ou REDIS_URL aponta para localhost."
+    warn "Em produção deve apontar para os containers: @db e @redis"
+    warn "Corrija o .env antes de continuar."
+    exit 1
+fi
 
 # -----------------------------------------------------------------------------
 step "2/7 Construindo imagem sandbox"
