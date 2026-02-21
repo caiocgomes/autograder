@@ -9,7 +9,6 @@ from app.auth.dependencies import get_current_user, require_admin
 from app.auth.security import hash_password, verify_password
 from app.schemas.auth import UserResponse
 from app.config import settings
-from app.integrations import manychat
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -75,10 +74,6 @@ async def update_profile(
 
     if update_data.whatsapp_number:
         current_user.whatsapp_number = update_data.whatsapp_number
-        if settings.manychat_enabled:
-            subscriber_id = manychat.find_subscriber(update_data.whatsapp_number)
-            if subscriber_id:
-                current_user.manychat_subscriber_id = subscriber_id
 
     db.commit()
     db.refresh(current_user)
@@ -89,7 +84,6 @@ async def update_profile(
         role=current_user.role.value,
         created_at=current_user.created_at.isoformat(),
         whatsapp_number=current_user.whatsapp_number,
-        manychat_subscriber_id=current_user.manychat_subscriber_id,
     )
 
 

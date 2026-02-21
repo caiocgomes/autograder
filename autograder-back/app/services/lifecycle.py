@@ -21,6 +21,26 @@ from app import integrations
 
 logger = logging.getLogger(__name__)
 
+# WhatsApp message templates for lifecycle events
+MSG_ONBOARDING = (
+    "Olá! Seu acesso ao {product_name} foi confirmado.\n\n"
+    "Para liberar seu acesso ao Discord, use o comando /registrar com o token abaixo:\n\n"
+    "Token: {onboarding_token}\n\n"
+    "O token expira em 7 dias."
+)
+MSG_WELCOME = (
+    "Tudo pronto! Seu acesso ao {product_name} está ativo. "
+    "Você já pode acessar o Discord e a plataforma. Bons estudos!"
+)
+MSG_WELCOME_BACK = (
+    "Bem-vindo de volta ao {product_name}! "
+    "Seu acesso foi reativado. Bons estudos!"
+)
+MSG_CHURN = (
+    "Seu acesso ao {product_name} foi encerrado. "
+    "Se tiver dúvidas, responda esta mensagem."
+)
+
 # State machine: maps (from_state, trigger) → to_state
 # None from_state means "create new"
 TRANSITIONS: Dict[Tuple[Optional[str], str], str] = {
@@ -108,6 +128,25 @@ def generate_onboarding_token(db: Session, user: User) -> str:
     return token
 
 
+def _get_all_active_product_rules(
+    db: Session, email: str
+) -> List[Tuple[Optional[Product], List[ProductAccessRule]]]:
+    """Get all products and their rules for a buyer email, based on active HotmartBuyer records."""
+    from app.models.hotmart_buyer import HotmartBuyer
+
+    buyers = (
+        db.query(HotmartBuyer)
+        .filter(HotmartBuyer.email == email, HotmartBuyer.status == "Ativo")
+        .all()
+    )
+    result = []
+    for buyer in buyers:
+        product, rules = _get_product_rules(db, buyer.hotmart_product_id)
+        if product:
+            result.append((product, rules))
+    return result
+
+
 def _get_product_rules(db: Session, hotmart_product_id: str) -> Tuple[Optional[Product], List[ProductAccessRule]]:
     product = db.query(Product).filter(
         Product.hotmart_product_id == hotmart_product_id,
@@ -122,32 +161,17 @@ def _side_effects_for_pending_onboarding(
     db: Session, user: User, product: Optional[Product], rules: List[ProductAccessRule]
 ) -> None:
     """Side-effects when transitioning to pending_onboarding"""
-    from app.integrations import manychat
+    from app.integrations import evolution
 
     token = generate_onboarding_token(db, user)
 
-    for rule in rules:
-        if rule.rule_type == AccessRuleType.MANYCHAT_TAG and user.manychat_subscriber_id:
-            _execute_side_effect(
-                "manychat.tag_added",
-                lambda sid=user.manychat_subscriber_id, tag=rule.rule_value: manychat.add_tag(sid, tag),
-                db, user, {"tag": rule.rule_value},
-            )
-
-    if user.manychat_subscriber_id and user.whatsapp_number:
-        from app.config import settings
+    if user.whatsapp_number:
+        product_name = product.name if product else ""
+        text = MSG_ONBOARDING.format(product_name=product_name, onboarding_token=token)
         _execute_side_effect(
-            "manychat.flow_triggered",
-            lambda: manychat.trigger_flow(
-                user.manychat_subscriber_id,
-                settings.manychat_onboarding_flow_id,
-                {
-                    "student_name": user.email,
-                    "onboarding_token": token,
-                    "product_name": product.name if product else "",
-                },
-            ),
-            db, user, {"flow": "onboarding", "token": token},
+            "evolution.message_sent",
+            lambda: evolution.send_message(user.whatsapp_number, text),
+            db, user, {"event": "onboarding", "token": token},
         )
 
 
@@ -156,9 +180,8 @@ def _side_effects_for_active(
     is_reactivation: bool = False,
 ) -> None:
     """Side-effects when transitioning to active"""
-    from app.integrations import discord as discord_client, manychat
+    from app.integrations import discord as discord_client, evolution
     from app.services.enrollment import auto_enroll_by_product
-    from app.config import settings
 
     for rule in rules:
         if rule.rule_type == AccessRuleType.DISCORD_ROLE and user.discord_id:
@@ -174,20 +197,19 @@ def _side_effects_for_active(
             except Exception as e:
                 _log_event(db, "enrollment.enrolled", user.id, {"class_id": rule.rule_value},
                            status=EventStatus.FAILED, error_message=str(e))
-        elif rule.rule_type == AccessRuleType.MANYCHAT_TAG and user.manychat_subscriber_id:
-            _execute_side_effect(
-                "manychat.tag_added",
-                lambda sid=user.manychat_subscriber_id, tag=rule.rule_value: manychat.add_tag(sid, tag),
-                db, user, {"tag": rule.rule_value},
-            )
 
-    if user.manychat_subscriber_id:
-        flow_id = settings.manychat_welcome_back_flow_id if is_reactivation else settings.manychat_welcome_flow_id
-        flow_name = "welcome-back" if is_reactivation else "welcome-confirmed"
+    if user.whatsapp_number:
+        product_name = product.name if product else ""
+        if is_reactivation:
+            text = MSG_WELCOME_BACK.format(product_name=product_name)
+            event_name = "welcome-back"
+        else:
+            text = MSG_WELCOME.format(product_name=product_name)
+            event_name = "welcome-confirmed"
         _execute_side_effect(
-            "manychat.flow_triggered",
-            lambda: manychat.trigger_flow(user.manychat_subscriber_id, flow_id),
-            db, user, {"flow": flow_name},
+            "evolution.message_sent",
+            lambda: evolution.send_message(user.whatsapp_number, text),
+            db, user, {"event": event_name},
         )
 
 
@@ -195,9 +217,8 @@ def _side_effects_for_churned(
     db: Session, user: User, product: Optional[Product], rules: List[ProductAccessRule]
 ) -> None:
     """Side-effects when transitioning to churned"""
-    from app.integrations import discord as discord_client, manychat
+    from app.integrations import discord as discord_client, evolution
     from app.services.enrollment import auto_unenroll_by_product
-    from app.config import settings
 
     for rule in rules:
         if rule.rule_type == AccessRuleType.DISCORD_ROLE and user.discord_id:
@@ -213,18 +234,14 @@ def _side_effects_for_churned(
             except Exception as e:
                 _log_event(db, "enrollment.unenrolled", user.id, {"class_id": rule.rule_value},
                            status=EventStatus.FAILED, error_message=str(e))
-        elif rule.rule_type == AccessRuleType.MANYCHAT_TAG and user.manychat_subscriber_id:
-            _execute_side_effect(
-                "manychat.tag_removed",
-                lambda sid=user.manychat_subscriber_id, tag=rule.rule_value: manychat.remove_tag(sid, tag),
-                db, user, {"tag": rule.rule_value},
-            )
 
-    if user.manychat_subscriber_id:
+    if user.whatsapp_number:
+        product_name = product.name if product else ""
+        text = MSG_CHURN.format(product_name=product_name)
         _execute_side_effect(
-            "manychat.flow_triggered",
-            lambda: manychat.trigger_flow(user.manychat_subscriber_id, settings.manychat_churn_flow_id),
-            db, user, {"flow": "churn-notification"},
+            "evolution.message_sent",
+            lambda: evolution.send_message(user.whatsapp_number, text),
+            db, user, {"event": "churn-notification"},
         )
 
 
@@ -249,7 +266,14 @@ def transition(
 
     is_reactivation = from_state == LifecycleStatus.CHURNED and to_state == LifecycleStatus.ACTIVE
 
-    product, rules = _get_product_rules(db, hotmart_product_id) if hotmart_product_id else (None, [])
+    if hotmart_product_id:
+        product, rules = _get_product_rules(db, hotmart_product_id)
+    elif trigger == "discord_registered":
+        all_pr = _get_all_active_product_rules(db, user.email)
+        rules = [rule for _, pr in all_pr for rule in pr]
+        product = all_pr[0][0] if all_pr else None
+    else:
+        product, rules = None, []
 
     # Execute transition
     user.lifecycle_status = to_state

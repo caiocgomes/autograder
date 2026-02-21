@@ -39,7 +39,6 @@ docker compose up -d                                          # Start Postgres +
 docker compose --profile discord up -d                        # Also start Discord bot
 docker compose logs -f backend                                # Follow backend logs
 docker compose logs -f worker                                 # Follow worker logs
-docker compose logs -f discord-bot                            # Follow Discord bot logs
 docker build -f Dockerfile.sandbox -t autograder-sandbox .    # Build sandbox image (required for code execution)
 ```
 
@@ -59,7 +58,7 @@ Swagger UI at http://localhost:8000/docs when backend is running.
 
 ### Grading Pipeline (async via Celery)
 
-Student submits code via `POST /submissions` -> submission stored with status "queued" -> Celery task picks it up:
+Student submits code via `POST /submissions` → submission stored with status "queued" → Celery task picks it up:
 
 1. **Test execution**: `app/tasks.py` generates a test harness script, runs it in a Docker container (`Dockerfile.sandbox`) with hard isolation (no network, read-only fs, non-root user, 30s timeout, 512MB memory limit). Docker SDK is used directly, not CLI.
 2. **LLM evaluation** (optional, per-exercise toggle): Calls OpenAI or Anthropic API with exercise description + student code + grading criteria. Response cached by code hash.
@@ -70,14 +69,35 @@ The sandbox Docker client has a macOS fallback socket path (`~/.docker/run/docke
 ### Backend Layers
 
 - **Routers** (`app/routers/`): FastAPI endpoints. Auth, users, classes, exercises, exercise_lists, submissions, grades, webhooks, products, admin_events.
-- **Models** (`app/models/`): SQLAlchemy ORM. Key entities: User (roles: admin/professor/student/ta; lifecycle_status: pending_payment/pending_onboarding/active/churned), Class, ClassEnrollment (enrollment_source: manual/product), Group, Exercise, ExerciseList, Submission, TestResult, Grade, LLMEvaluation, Product, ProductAccessRule, Event.
+- **Models** (`app/models/`): SQLAlchemy ORM. Key entities: User (roles: admin/professor/student/ta; lifecycle_status: pending_payment/pending_onboarding/active/churned), Class, ClassEnrollment (enrollment_source: manual/product), Group, Exercise, ExerciseList, Submission, TestResult, Grade, LLMEvaluation, Product, ProductAccessRule (types: discord_role, class_enrollment), Event, StudentCourseStatus.
 - **Schemas** (`app/schemas/`): Pydantic request/response models.
 - **Auth** (`app/auth/`): JWT tokens (access 15min, refresh 7 days), bcrypt password hashing, RBAC via `require_role()` dependency, Redis-backed rate limiting on login.
-- **Services** (`app/services/`): Extracted business logic. `lifecycle.py`: state machine (pending_payment→pending_onboarding→active→churned) with side-effects. `enrollment.py`: auto-enroll/unenroll by product, preserving manual enrollments. `notifications.py`: Discord + ManyChat notifications.
-- **Integrations** (`app/integrations/`): `hotmart.py` (HMAC validation, payload parsing), `discord.py` (role management via REST), `manychat.py` (tags, flows, subscriber resolution).
-- **Tasks** (`app/tasks.py`): Celery async tasks for execution, grading, LLM evaluation, `process_hotmart_event`, `execute_side_effect`.
+- **Services** (`app/services/`): Extracted business logic. `lifecycle.py`: state machine (pending_payment→pending_onboarding→active→churned) with side-effects (Discord roles, class enrollment, WhatsApp via Evolution API). `enrollment.py`: auto-enroll/unenroll by product, preserving manual enrollments. `notifications.py`: Discord DM + WhatsApp (Evolution API).
+- **Integrations** (`app/integrations/`): `hotmart.py` (HMAC validation, payload parsing, buyer status sync), `discord.py` (role management via REST), `evolution.py` (WhatsApp messages via Evolution API — `send_message(phone, text)`).
+- **Tasks** (`app/tasks.py`): Celery async tasks for execution, grading, LLM evaluation, `process_hotmart_event`, `execute_side_effect`, `sync_student_course_status` (daily batch that syncs Hotmart buyer statuses to `student_course_status` SCD Type 2 table).
 - **Discord bot** (`app/discord_bot.py`): Separate worker. `/registrar` slash command, `on_member_join` handler. Run as standalone process.
-- **Config** (`app/config.py`): Pydantic Settings loading from `.env`. All config via environment variables. Feature flags: `HOTMART_WEBHOOK_ENABLED`, `DISCORD_ENABLED`, `MANYCHAT_ENABLED`.
+- **Config** (`app/config.py`): Pydantic Settings loading from `.env`. All config via environment variables. Feature flags: `HOTMART_WEBHOOK_ENABLED`, `DISCORD_ENABLED`, `EVOLUTION_ENABLED`.
+
+### WhatsApp Messaging
+
+Evolution API sends WhatsApp messages directly by phone number (E.164 format) — no subscriber resolution step. Chatwoot connects to the same Evolution API instance externally to provide an inbox for incoming replies. No Chatwoot code in the autograder backend.
+
+### Student Lifecycle
+
+`lifecycle.py` implements a state machine with side-effects per transition:
+
+| Trigger | Transition | Side-effects |
+|---------|-----------|--------------|
+| purchase_approved | → pending_onboarding | generate token, WhatsApp onboarding message |
+| discord_registered | → active | assign Discord roles, enroll in classes, WhatsApp welcome |
+| subscription_cancelled / purchase_refunded | → churned | revoke Discord roles, unenroll, WhatsApp churn notification |
+| purchase_approved (from churned) | → active | assign roles, enroll, WhatsApp welcome-back |
+
+Side-effect failures retry once; persistent failures log to `Event` table and alert admin via Discord DM.
+
+### Student Course Status (SCD Type 2)
+
+`student_course_status` table tracks `(user, product)` status history with `valid_from`, `valid_to`, `is_current` columns. Updated by the `sync_student_course_status` Celery task (daily at 02:00 UTC) reading from Hotmart API. Powers segmentation queries without relying on external tag state.
 
 ### Frontend Layers
 
@@ -93,9 +113,11 @@ PostgreSQL 16 via SQLAlchemy. Alembic migrations in `autograder-back/alembic/`. 
 
 `database.py` provides `get_db()` dependency for session injection into routers.
 
+**Alembic gotcha**: SQLAlchemy uses enum member *names* (uppercase: `DISCORD_ROLE`) for PostgreSQL enum types, not values (`discord_role`). When writing raw SQL in migrations that filters on enum columns, use the uppercase name.
+
 ### Key Design Decisions
 
-- **Exercise randomization**: Deterministic per-student shuffle using `Random(student_id * 31 + list_id)` seed, so order is consistent across page loads but different per student.
+- **Exercise randomization**: Deterministic per-student shuffle using `Random(student_id * 31 + list_id)` seed — consistent across page loads, different per student.
 - **Test cases have a `hidden` flag**: Hidden tests run but details aren't shown to students.
 - **ExerciseList scoping**: Lists can target specific groups within a class, not just the whole class.
 - **Late penalties**: Configured per ExerciseList as percent-per-day after `closes_at`.
@@ -103,15 +125,15 @@ PostgreSQL 16 via SQLAlchemy. Alembic migrations in `autograder-back/alembic/`. 
 
 ## Testing
 
-Backend tests use FastAPI's `TestClient` with dependency overrides. `conftest.py` provides fixtures that swap `get_db` and `get_current_user` with mocks, so tests run without a real database. There are 22 test files covering all routers, services, and integrations.
+Backend tests use FastAPI's `TestClient` with dependency overrides. `conftest.py` provides fixtures that swap `get_db` and `get_current_user` with mocks, so tests run without a real database. 23 test files covering routers, services, and integrations.
 
 ### Mock DB chain pattern
 
-The `mock_db` fixture chains all calls back to itself (`query.return_value = db`, `filter.return_value = db`), so `.query(...).filter(...).first()` all flow through the same object. Two critical gotchas:
+The `mock_db` fixture chains all calls back to itself (`query.return_value = db`, `filter.return_value = db`), so `.query(...).filter(...).first()` flows through the same object. Two critical gotchas:
 
-1. **Multiple `.first()` calls in one endpoint**: Using `mock_db.query.return_value.filter.return_value.first.return_value = x` makes every `.first()` in that request return `x`. If an endpoint calls `.first()` twice (e.g., fetch object, then check for duplicate), use `side_effect=[x, None]` instead.
+1. **Multiple `.first()` calls in one endpoint**: `mock_db.query.return_value.filter.return_value.first.return_value = x` makes every `.first()` return `x`. If an endpoint calls `.first()` twice, use `side_effect=[x, None]` instead.
 
-2. **SQLAlchemy server-side defaults**: When an endpoint creates an ORM object (`Class(name=..., professor_id=...)`) and calls `db.refresh(obj)`, fields with `server_default` (e.g., `created_at = Column(..., server_default=func.now())`) and sometimes `default` columns stay `None` in-memory because no real INSERT occurs. The `db.refresh` mock must explicitly set those fields via `side_effect=lambda obj: (setattr(obj, 'created_at', datetime(...)), ...)`.
+2. **SQLAlchemy server-side defaults**: Fields with `server_default` (e.g., `created_at`) stay `None` in-memory after mock INSERT. Set them explicitly in the `db.refresh` mock via `side_effect=lambda obj: setattr(obj, 'created_at', datetime(...))`.
 
 No frontend tests exist yet.
 

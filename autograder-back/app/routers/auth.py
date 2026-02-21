@@ -20,7 +20,6 @@ from app.auth.security import (
 )
 from app.auth.rate_limiter import rate_limiter
 from app.config import settings
-from app.integrations import manychat
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -46,10 +45,6 @@ async def register(user_data: UserRegister, db: Session = Depends(get_db)):
 
     if user_data.whatsapp_number:
         new_user.whatsapp_number = user_data.whatsapp_number
-        if settings.manychat_enabled:
-            subscriber_id = manychat.find_subscriber(user_data.whatsapp_number)
-            if subscriber_id:
-                new_user.manychat_subscriber_id = subscriber_id
 
     db.add(new_user)
     db.commit()

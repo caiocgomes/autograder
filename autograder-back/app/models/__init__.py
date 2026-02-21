@@ -23,6 +23,8 @@ from .submission import (
 from .product import Product, ProductAccessRule, AccessRuleType
 from .event import Event, EventStatus
 from .student_course_status import StudentCourseStatus
+from .hotmart_buyer import HotmartBuyer
+from .hotmart_product_mapping import HotmartProductMapping
 
 __all__ = [
     "Base",
@@ -54,4 +56,6 @@ __all__ = [
     "Event",
     "EventStatus",
     "StudentCourseStatus",
+    "HotmartBuyer",
+    "HotmartProductMapping",
 ]

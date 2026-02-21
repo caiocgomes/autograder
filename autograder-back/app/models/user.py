@@ -38,7 +38,6 @@ class User(Base):
     lifecycle_status = Column(Enum(LifecycleStatus), nullable=True)
     onboarding_token = Column(String(16), unique=True, nullable=True, index=True)
     onboarding_token_expires_at = Column(DateTime(timezone=True), nullable=True)
-    manychat_subscriber_id = Column(String(255), nullable=True)
 
     # Relationships
     classes_taught = relationship("Class", back_populates="professor", foreign_keys="Class.professor_id")

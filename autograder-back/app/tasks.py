@@ -1099,25 +1099,10 @@ def execute_side_effect(self, event_id: int):
             from app.integrations.discord import revoke_role
             success = revoke_role(target_user.discord_id, payload.get("role_id", ""))
 
-        elif event_type == "manychat.tag_added" and target_user and target_user.manychat_subscriber_id:
-            from app.integrations.manychat import add_tag
-            success = add_tag(target_user.manychat_subscriber_id, payload.get("tag", ""))
-
-        elif event_type == "manychat.tag_removed" and target_user and target_user.manychat_subscriber_id:
-            from app.integrations.manychat import remove_tag
-            success = remove_tag(target_user.manychat_subscriber_id, payload.get("tag", ""))
-
-        elif event_type == "manychat.flow_triggered" and target_user and target_user.manychat_subscriber_id:
-            from app.integrations.manychat import trigger_flow
-            from app.config import settings
-            flow_map = {
-                "onboarding": settings.manychat_onboarding_flow_id,
-                "welcome-confirmed": settings.manychat_welcome_flow_id,
-                "churn-notification": settings.manychat_churn_flow_id,
-                "welcome-back": settings.manychat_welcome_back_flow_id,
-            }
-            flow_id = flow_map.get(payload.get("flow", ""), "")
-            success = trigger_flow(target_user.manychat_subscriber_id, flow_id)
+        elif event_type == "evolution.message_sent" and target_user and target_user.whatsapp_number:
+            from app.integrations.evolution import send_message
+            text = payload.get("text", "")
+            success = send_message(target_user.whatsapp_number, text)
 
         else:
             return {"status": "skipped", "reason": f"No handler for event type: {event_type}"}
@@ -1258,11 +1243,8 @@ def sync_hotmart_students(self, product_id=None):
         db.close()
 
 # ---------------------------------------------------------------------------
-# ManyChat Tag Sync Helpers
+# Student Course Status Sync Helpers
 # ---------------------------------------------------------------------------
-
-_MANYCHAT_STATUSES = ["Ativo", "Inadimplente", "Cancelado", "Reembolsado"]
-
 
 def _update_scd2(user_id: int, product_id: int, new_status: str, source: str, db) -> bool:
     """
@@ -1303,35 +1285,21 @@ def _update_scd2(user_id: int, product_id: int, new_status: str, source: str, db
     return True
 
 
-def _apply_manychat_tags(subscriber_id: str, course_name: str, new_status: str):
+@celery_app.task(name="sync_student_course_status", bind=True, max_retries=0)
+def sync_student_course_status(self, product_id=None):
     """
-    Brute-force update ManyChat tags for a course.
-    Removes all possible status tags then adds course tag + current status tag.
-    """
-    from app.integrations import manychat
-    for status in _MANYCHAT_STATUSES:
-        manychat.remove_tag(subscriber_id, f"{course_name}, {status}")
-    manychat.add_tag(subscriber_id, course_name)
-    manychat.add_tag(subscriber_id, f"{course_name}, {new_status}")
+    Reconcile student_course_status SCD2 table for all (or one) Hotmart products.
 
-
-@celery_app.task(name="sync_manychat_tags", bind=True, max_retries=0)
-def sync_manychat_tags(self, product_id=None):
-    """
-    Reconcile ManyChat tags for all (or one) Hotmart products.
-
-    For each product with MANYCHAT_TAG ProductAccessRules:
+    For each active product:
     1. Fetch buyer statuses from Hotmart (6-year history)
     2. Match to User records in DB
     3. Update student_course_status (SCD Type 2)
-    4. Apply dual tags in ManyChat: {Course} + {Course}, {Status}
-    5. Derived access rules are expanded via ProductAccessRule config
     """
     import logging as _logging
-    from app.integrations import hotmart, manychat
+    from app.integrations import hotmart
     from app.models.event import Event, EventStatus
     from app.models.user import User
-    from app.models.product import Product, ProductAccessRule, AccessRuleType
+    from app.models.product import Product
 
     _log = _logging.getLogger(__name__)
     db = SessionLocal()
@@ -1346,19 +1314,10 @@ def sync_manychat_tags(self, product_id=None):
             "synced": 0,
             "status_changes": 0,
             "skipped_no_phone": 0,
-            "skipped_no_subscriber": 0,
             "skipped_error": 0,
         }
 
         for product in products:
-            tag_rules = [
-                r.rule_value
-                for r in product.access_rules
-                if r.rule_type == AccessRuleType.MANYCHAT_TAG
-            ]
-            if not tag_rules:
-                continue
-
             try:
                 buyer_statuses = hotmart.get_buyer_statuses(str(product.hotmart_product_id))
             except Exception as e:
@@ -1373,54 +1332,24 @@ def sync_manychat_tags(self, product_id=None):
                     if not user:
                         continue
 
-                    # Update SCD2 for each course tag (direct + derived)
-                    for course_name in tag_rules:
-                        tag_product = (
-                            db.query(Product)
-                            .join(ProductAccessRule)
-                            .filter(
-                                ProductAccessRule.rule_type == AccessRuleType.MANYCHAT_TAG,
-                                ProductAccessRule.rule_value == course_name,
-                                Product.is_active == True,
-                            )
-                            .first()
-                        ) or product
-
-                        changed = _update_scd2(
-                            user.id, tag_product.id, biz_status, "hotmart_sync", db
-                        )
-                        if changed:
-                            counters["status_changes"] += 1
+                    changed = _update_scd2(user.id, product.id, biz_status, "hotmart_sync", db)
+                    if changed:
+                        counters["status_changes"] += 1
 
                     if not user.whatsapp_number:
                         counters["skipped_no_phone"] += 1
-                        db.commit()
-                        continue
-
-                    subscriber_id = user.manychat_subscriber_id
-                    if not subscriber_id:
-                        subscriber_id = manychat.find_subscriber(user.whatsapp_number)
-                        if subscriber_id:
-                            user.manychat_subscriber_id = subscriber_id
-                        else:
-                            counters["skipped_no_subscriber"] += 1
-                            db.commit()
-                            continue
-
-                    for course_name in tag_rules:
-                        _apply_manychat_tags(subscriber_id, course_name, biz_status)
 
                     counters["synced"] += 1
                     db.commit()
 
                 except Exception as e:
                     db.rollback()
-                    _log.error("sync_manychat_tags: error for %s / product %s: %s",
+                    _log.error("sync_student_course_status: error for %s / product %s: %s",
                                email, product.id, e)
                     counters["skipped_error"] += 1
 
         db.add(Event(
-            type="manychat.sync_completed",
+            type="course_status.sync_completed",
             payload={**counters, "product_id": product_id},
             status=EventStatus.PROCESSED,
         ))
@@ -1430,6 +1359,236 @@ def sync_manychat_tags(self, product_id=None):
 
     except Exception as e:
         db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Hotmart Buyer Snapshot Sync
+# ---------------------------------------------------------------------------
+
+@celery_app.task(name="sync_hotmart_buyers", bind=True, max_retries=0)
+def sync_hotmart_buyers(self, product_id=None):
+    """
+    Snapshot de todos os compradores Hotmart no banco local.
+
+    Para cada produto ativo:
+    1. Busca statuses de compradores via API Hotmart
+    2. Faz UPSERT em hotmart_buyers (por email + hotmart_product_id)
+    3. Resolve user_id pelo email (NULL se não tem conta na plataforma)
+    4. Registra evento com contadores ao final
+    """
+    import logging as _logging
+    import datetime as _dt
+    from app.integrations import hotmart
+    from app.models.event import Event, EventStatus
+    from app.models.user import User
+    from app.models.product import Product
+    from app.models.hotmart_buyer import HotmartBuyer
+
+    _log = _logging.getLogger(__name__)
+    db = SessionLocal()
+
+    try:
+        query = db.query(Product).filter(Product.is_active == True)
+        if product_id:
+            query = query.filter(Product.id == product_id)
+        products = query.all()
+
+        counters = {
+            "inserted": 0,
+            "updated": 0,
+            "total": 0,
+            "errors": 0,
+        }
+
+        now = _dt.datetime.now(_dt.timezone.utc)
+
+        for product in products:
+            try:
+                buyer_statuses = hotmart.get_buyer_statuses(str(product.hotmart_product_id))
+            except Exception as e:
+                _log.error("sync_hotmart_buyers: failed to fetch for product %s: %s", product.id, e)
+                counters["errors"] += 1
+                continue
+
+            # Fetch contact info (name + phone) from /sales/users.
+            # May not cover all historical buyers — fields stay nullable for those.
+            contact_info = {}
+            try:
+                for buyer in hotmart.list_buyers_with_phone(str(product.hotmart_product_id)):
+                    email_key = buyer.get("email", "")
+                    if email_key:
+                        contact_info[email_key] = {
+                            "name": buyer.get("name", ""),
+                            "phone": buyer.get("phone", ""),
+                        }
+            except Exception as e:
+                _log.warning("sync_hotmart_buyers: failed to fetch contact info for product %s: %s",
+                             product.id, e)
+
+            for email, status in buyer_statuses.items():
+                try:
+                    user = db.query(User).filter(User.email == email).first()
+                    user_id = user.id if user else None
+
+                    existing = (
+                        db.query(HotmartBuyer)
+                        .filter(
+                            HotmartBuyer.email == email,
+                            HotmartBuyer.hotmart_product_id == str(product.hotmart_product_id),
+                        )
+                        .first()
+                    )
+
+                    contact = contact_info.get(email, {})
+
+                    if existing:
+                        existing.status = status
+                        existing.user_id = user_id
+                        existing.last_synced_at = now
+                        if contact.get("name"):
+                            existing.name = contact["name"]
+                        if contact.get("phone"):
+                            existing.phone = contact["phone"]
+                        counters["updated"] += 1
+                    else:
+                        db.add(HotmartBuyer(
+                            email=email,
+                            name=contact.get("name", "") or None,
+                            phone=contact.get("phone", "") or None,
+                            hotmart_product_id=str(product.hotmart_product_id),
+                            status=status,
+                            user_id=user_id,
+                            last_synced_at=now,
+                        ))
+                        counters["inserted"] += 1
+
+                    counters["total"] += 1
+                    db.commit()
+
+                except Exception as e:
+                    db.rollback()
+                    _log.error("sync_hotmart_buyers: error for %s / product %s: %s",
+                               email, product.id, e)
+                    counters["errors"] += 1
+
+        db.add(Event(
+            type="hotmart_buyers.sync_completed",
+            payload={**counters, "product_id": product_id},
+            status=EventStatus.PROCESSED,
+        ))
+        db.commit()
+
+        return {"status": "ok", **counters}
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+@celery_app.task(name="onboard_historical_buyers", bind=True, max_retries=0)
+def onboard_historical_buyers(self):
+    """
+    Onboarding em lote de compradores históricos ativos sem conta na plataforma.
+
+    Para cada email único em hotmart_buyers (status=Ativo, user_id=NULL):
+    1. Cria User se não existir (email, name, whatsapp_number)
+    2. Dispara lifecycle.transition("purchase_approved") → gera token + envia WhatsApp
+    3. Atualiza hotmart_buyers.user_id em todos os rows do email
+
+    Idempotente: rows com user_id preenchido são ignorados.
+    """
+    import logging as _logging
+    import secrets as _secrets
+    from collections import defaultdict
+
+    from app.auth.security import hash_password
+    from app.models.hotmart_buyer import HotmartBuyer
+    from app.models.user import User, UserRole
+    from app.models.event import Event, EventStatus
+    from app.services.lifecycle import transition
+
+    _log = _logging.getLogger(__name__)
+    db = SessionLocal()
+
+    counters = {"created": 0, "skipped": 0, "errors": 0, "total": 0}
+
+    try:
+        eligible = (
+            db.query(HotmartBuyer)
+            .filter(
+                HotmartBuyer.status == "Ativo",
+                HotmartBuyer.user_id == None,
+            )
+            .all()
+        )
+
+        # Dedup by email — keep all rows per email for user_id backfill
+        by_email = defaultdict(list)
+        for row in eligible:
+            by_email[row.email].append(row)
+
+        for email, rows in by_email.items():
+            try:
+                counters["total"] += 1
+
+                primary = rows[0]
+
+                user = db.query(User).filter(User.email == email).first()
+
+                if user:
+                    for row in rows:
+                        row.user_id = user.id
+                    db.commit()
+                    counters["skipped"] += 1
+                    continue
+
+                user = User(
+                    email=email,
+                    whatsapp_number=primary.phone or None,
+                    password_hash=hash_password(_secrets.token_urlsafe(16)),
+                    role=UserRole.STUDENT,
+                    lifecycle_status=None,
+                )
+                db.add(user)
+                db.flush()
+
+                transition(
+                    db,
+                    user,
+                    trigger="purchase_approved",
+                    hotmart_product_id=str(primary.hotmart_product_id),
+                )
+
+                for row in rows:
+                    row.user_id = user.id
+
+                db.commit()
+                counters["created"] += 1
+
+            except Exception as e:
+                db.rollback()
+                _log.error("onboard_historical_buyers: error for %s: %s", email, e)
+                counters["errors"] += 1
+
+        db.add(Event(
+            type="hotmart_buyers.historical_onboarding_completed",
+            payload=counters,
+            status=EventStatus.PROCESSED,
+        ))
+        db.commit()
+
+        return counters
+
+    except Exception as e:
+        db.rollback()
+        _log.error("onboard_historical_buyers: fatal error: %s", e)
         return {"error": str(e)}
 
     finally:

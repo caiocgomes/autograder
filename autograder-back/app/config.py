@@ -83,15 +83,11 @@ class Settings(BaseSettings):
     discord_registration_channel_id: str = ""
     discord_enabled: bool = False
 
-    # ManyChat integration
-    manychat_api_token: str = ""
-    manychat_enabled: bool = False
-    manychat_onboarding_flow_id: str = ""
-    manychat_welcome_flow_id: str = ""
-    manychat_churn_flow_id: str = ""
-    manychat_welcome_back_flow_id: str = ""
-    manychat_new_assignment_flow_id: str = ""
-    manychat_deadline_reminder_flow_id: str = ""
+    # Evolution API integration (WhatsApp)
+    evolution_api_url: str = ""
+    evolution_api_key: str = ""
+    evolution_instance: str = ""
+    evolution_enabled: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -49,7 +49,6 @@ class UserResponse(BaseModel):
     discord_id: Optional[str] = None
     whatsapp_number: Optional[str] = None
     lifecycle_status: Optional[str] = None
-    manychat_subscriber_id: Optional[str] = None
 
     class Config:
         from_attributes = True

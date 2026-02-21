@@ -108,15 +108,15 @@ def trigger_hotmart_sync(
     return {"task_id": task.id, "message": "Sync enqueued"}
 
 
-@router.post("/manychat-sync")
-def trigger_manychat_sync(
+@router.post("/course-status-sync")
+def trigger_course_status_sync(
     body: HotmartSyncRequest = HotmartSyncRequest(),
     _: None = Depends(admin_only),
 ):
     """
-    Manually trigger ManyChat tag sync for all products (or a specific one).
-    Updates student_course_status SCD2 and applies dual tags in ManyChat.
+    Manually trigger student course status sync for all products (or a specific one).
+    Updates student_course_status SCD2 table from Hotmart data.
     """
-    from app.tasks import sync_manychat_tags
-    task = sync_manychat_tags.delay(body.product_id)
-    return {"task_id": task.id, "message": "ManyChat sync enqueued"}
+    from app.tasks import sync_student_course_status
+    task = sync_student_course_status.delay(body.product_id)
+    return {"task_id": task.id, "message": "Course status sync enqueued"}

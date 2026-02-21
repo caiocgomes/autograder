@@ -37,6 +37,8 @@ services:
       dockerfile: Dockerfile
     container_name: autograder-backend
     restart: always
+    ports:
+      - "${APP_PORT:-8000}:8000"
     env_file:
       - ./autograder-back/.env
     environment:
@@ -74,6 +76,26 @@ services:
       redis:
         condition: service_healthy
 
+  discord-bot:
+    build:
+      context: ./autograder-back
+      dockerfile: Dockerfile
+    container_name: autograder-discord-bot
+    restart: always
+    command: python -m app.discord_bot
+    env_file:
+      - ./autograder-back/.env
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles:
+      - discord
+
   nginx:
     image: nginx:alpine
     container_name: autograder-nginx
@@ -87,6 +109,8 @@ services:
       - frontend_build:/usr/share/nginx/html
     depends_on:
       - backend
+    profiles:
+      - ssl
 
   # Database backup (runs daily via cron in container)
   db-backup:

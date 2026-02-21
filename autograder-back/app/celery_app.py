@@ -33,9 +33,14 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=0),  # every hour on the hour
         "args": [],
     },
-    "manychat-tag-sync-daily": {
-        "task": "sync_manychat_tags",
+    "course-status-sync-daily": {
+        "task": "sync_student_course_status",
         "schedule": crontab(hour=2, minute=0),  # 02:00 UTC daily
+        "args": [],
+    },
+    "hotmart-buyer-snapshot-daily": {
+        "task": "sync_hotmart_buyers",
+        "schedule": crontab(hour=3, minute=0),  # 03:00 UTC daily
         "args": [],
     },
 }

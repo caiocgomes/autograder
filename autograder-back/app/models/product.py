@@ -9,11 +9,10 @@ from .base import Base
 class AccessRuleType(str, enum.Enum):
     DISCORD_ROLE = "discord_role"
     CLASS_ENROLLMENT = "class_enrollment"
-    MANYCHAT_TAG = "manychat_tag"
 
 
 class Product(Base):
-    """Maps Hotmart products to access rules (Discord roles, classes, ManyChat tags)"""
+    """Maps Hotmart products to access rules (Discord roles, classes)"""
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -26,7 +25,7 @@ class Product(Base):
 
 
 class ProductAccessRule(Base):
-    """Defines what access a product grants (Discord role, class, or ManyChat tag)"""
+    """Defines what access a product grants (Discord role or class enrollment)"""
     __tablename__ = "product_access_rules"
 
     id = Column(Integer, primary_key=True, index=True)

@@ -1,5 +1,5 @@
 """
-Notification service - abstracts over Discord and ManyChat channels.
+Notification service - abstracts over Discord and WhatsApp channels.
 
 This is intentionally thin. The lifecycle service drives the when;
 this service handles the how.
@@ -40,15 +40,12 @@ def notify_admin_failure(side_effect_name: str, user: User, error: str) -> None:
 
 def notify_student_welcome(user: User, product_name: str) -> None:
     """Send a welcome notification when student becomes active."""
-    if settings.manychat_enabled and user.manychat_subscriber_id:
+    if settings.evolution_enabled and user.whatsapp_number:
         try:
-            from app.integrations.manychat import trigger_flow
-            trigger_flow(
-                user.manychat_subscriber_id,
-                settings.manychat_welcome_flow_id,
-                {"product_name": product_name},
-            )
+            from app.integrations.evolution import send_message
+            text = f"Bem-vindo ao {product_name}! Seu acesso está ativo. Bons estudos!"
+            send_message(user.whatsapp_number, text)
         except Exception as e:
             logger.error("notify_student_welcome failed: %s", e)
     else:
-        logger.info("Welcome notification skipped for %s (ManyChat disabled or no subscriber_id)", user.email)
+        logger.info("Welcome notification skipped for %s (Evolution API disabled or no whatsapp_number)", user.email)
