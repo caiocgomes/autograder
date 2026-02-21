@@ -23,7 +23,7 @@ database_url = os.getenv(
     "DATABASE_URL",
     "postgresql://autograder:autograder@localhost:5432/autograder"
 )
-config.set_main_option("sqlalchemy.url", database_url)
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
