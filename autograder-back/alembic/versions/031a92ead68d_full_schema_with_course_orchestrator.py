@@ -1,7 +1,7 @@
 """full schema with course orchestrator
 
 Revision ID: 031a92ead68d
-Revises: a1b2c3d4e5f6
+Revises: 869b0b496579
 Create Date: 2026-02-18 11:37:10.457221
 
 """
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = '031a92ead68d'
-down_revision: Union[str, None] = 'a1b2c3d4e5f6'
+down_revision: Union[str, None] = '869b0b496579'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

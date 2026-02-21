@@ -1,7 +1,7 @@
 """add student_course_status scd2
 
 Revision ID: 7af56f19e432
-Revises: 031a92ead68d
+Revises: a1b2c3d4e5f6
 Create Date: 2026-02-19 08:05:59.896426
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '7af56f19e432'
-down_revision: Union[str, None] = '031a92ead68d'
+down_revision: Union[str, None] = 'a1b2c3d4e5f6'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
