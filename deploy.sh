@@ -60,8 +60,9 @@ docker compose -f docker-compose.prod.yml ps db redis
 info "DB e Redis ok"
 
 # -----------------------------------------------------------------------------
-step "4/7 Rodando migrations"
+step "4/7 Buildando imagens e rodando migrations"
 # -----------------------------------------------------------------------------
+APP_PORT=$APP_PORT docker compose -f docker-compose.prod.yml build backend worker discord-bot
 APP_PORT=$APP_PORT docker compose -f docker-compose.prod.yml run --rm \
     --entrypoint "python -m alembic upgrade head" backend
 info "Migrations ok"
