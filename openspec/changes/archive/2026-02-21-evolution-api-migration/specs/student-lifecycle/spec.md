@@ -29,6 +29,6 @@ Side-effects:
 
 ## REMOVED Requirements
 
-### Requirement: Extended user model (partial)
+### Requirement: Extended user model
 **Reason**: `manychat_subscriber_id` field removed from User model — Evolution API uses `whatsapp_number` directly.
 **Migration**: Alembic migration to drop `manychat_subscriber_id` column. All references to `user.manychat_subscriber_id` removed from lifecycle side-effects.
