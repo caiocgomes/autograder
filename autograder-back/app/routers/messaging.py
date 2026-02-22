@@ -25,7 +25,10 @@ from app.schemas.messaging import (
     CampaignDetailOut,
     RecipientStatusOut,
     RetryResponse,
+    VariationRequest,
+    VariationResponse,
 )
+from app.services.message_rewriter import generate_variations
 from app.celery_app import celery_app
 
 router = APIRouter(prefix="/messaging", tags=["messaging"])
@@ -247,6 +250,41 @@ def retry_campaign(
     return RetryResponse(retrying=len(failed_recipients), campaign_id=campaign.id)
 
 
+@router.post("/variations", response_model=VariationResponse)
+def generate_message_variations(
+    request: VariationRequest,
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
+):
+    """Generate message variations using LLM for anti-spam diversity."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    try:
+        variations = generate_variations(
+            request.message_template, request.num_variations
+        )
+    except Exception as e:
+        logger.error("generate_message_variations failed: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Falha ao gerar variações. Tente novamente.",
+        )
+
+    warning = None
+    if len(variations) < request.num_variations:
+        warning = (
+            f"Apenas {len(variations)} variação(ões) válida(s) gerada(s) "
+            f"(solicitadas {request.num_variations})."
+        )
+
+    return VariationResponse(
+        variations=variations,
+        original=request.message_template,
+        warning=warning,
+    )
+
+
 @router.post("/send", response_model=BulkSendResponse, status_code=status.HTTP_202_ACCEPTED)
 def send_bulk_message(
     request: BulkSendRequest,
@@ -325,9 +363,14 @@ def send_bulk_message(
     db.refresh(campaign)
 
     # Dispatch Celery task
+    task_kwargs = {}
+    if request.variations:
+        task_kwargs["variations"] = request.variations
+
     task = celery_app.send_task(
         "app.tasks.send_bulk_messages",
         args=[campaign.id, request.message_template],
+        kwargs=task_kwargs,
     )
 
     return BulkSendResponse(
