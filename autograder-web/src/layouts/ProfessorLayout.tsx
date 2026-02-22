@@ -11,6 +11,7 @@ export function ProfessorLayout() {
     { path: '/professor/classes', label: 'My Classes' },
     { path: '/professor/exercises', label: 'Exercises' },
     { path: '/professor/grades', label: 'Grades' },
+    ...(user?.role === 'admin' ? [{ path: '/professor/messaging', label: 'Mensagens' }] : []),
   ];
 
   return (

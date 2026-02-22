@@ -1593,3 +1593,61 @@ def onboard_historical_buyers(self):
 
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Bulk messaging
+# ---------------------------------------------------------------------------
+
+def resolve_template(template: str, variables: Dict[str, str]) -> str:
+    """Replace {nome}, {primeiro_nome}, {email}, {turma} in template."""
+    result = template
+    for key, value in variables.items():
+        result = result.replace("{" + key + "}", value)
+    return result
+
+
+@celery_app.task(name="app.tasks.send_bulk_messages")
+def send_bulk_messages(recipients: List[Dict[str, Any]], message_template: str) -> Dict[str, int]:
+    """
+    Send a WhatsApp message to each recipient with throttling.
+
+    Args:
+        recipients: list of dicts with keys: user_id, phone, name, email, class_name
+        message_template: message with {nome}, {primeiro_nome}, {email}, {turma} placeholders
+
+    Returns:
+        dict with sent, failed, total counts
+    """
+    import time as _time
+    import random as _random
+    import logging as _logging
+    from app.integrations import evolution as _evo
+
+    _log = _logging.getLogger(__name__)
+    sent = 0
+    failed = 0
+
+    for i, recipient in enumerate(recipients):
+        variables = {
+            "nome": recipient.get("name", ""),
+            "primeiro_nome": recipient.get("name", "").split("@")[0].split()[0] if recipient.get("name") else "",
+            "email": recipient.get("email", ""),
+            "turma": recipient.get("class_name", ""),
+        }
+        message = resolve_template(message_template, variables)
+
+        success = _evo.send_message(recipient["phone"], message)
+        if success:
+            sent += 1
+        else:
+            failed += 1
+
+        # Throttle: random 10-30s between sends to avoid WhatsApp anti-spam
+        if i < len(recipients) - 1:
+            delay = _random.uniform(10, 30)
+            _log.info("Throttle: waiting %.1fs before next send (%d/%d)", delay, i + 1, len(recipients))
+            _time.sleep(delay)
+
+    _log.info("send_bulk_messages: sent=%d failed=%d total=%d", sent, failed, len(recipients))
+    return {"sent": sent, "failed": failed, "total": len(recipients)}

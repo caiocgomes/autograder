@@ -17,6 +17,7 @@ import { ExerciseFormPage } from './pages/professor/ExerciseFormPage';
 import { ExerciseListBuilderPage } from './pages/professor/ExerciseListBuilderPage';
 import { SubmissionReviewPage } from './pages/professor/SubmissionReviewPage';
 import { GradesPage } from './pages/professor/GradesPage';
+import { MessagingPage } from './pages/professor/MessagingPage';
 import { MyClassesPage } from './pages/student/MyClassesPage';
 import { ExerciseListsViewPage } from './pages/student/ExerciseListsViewPage';
 import { ExerciseDetailPage } from './pages/student/ExerciseDetailPage';
@@ -60,6 +61,7 @@ function App() {
           <Route path="classes/:classId/lists" element={<ExerciseListBuilderPage />} />
           <Route path="submissions/:id/review" element={<SubmissionReviewPage />} />
           <Route path="grades" element={<GradesPage />} />
+          <Route path="messaging" element={<MessagingPage />} />
         </Route>
 
         {/* Student Dashboard */}

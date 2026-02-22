@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.routers import auth, users, classes, exercises, exercise_lists, submissions, grades
-from app.routers import webhooks, products, admin_events
+from app.routers import webhooks, products, admin_events, messaging
 from app.config import settings
 
 
@@ -71,6 +71,7 @@ app.include_router(grades.router)
 app.include_router(webhooks.router)
 app.include_router(products.router)
 app.include_router(admin_events.router)
+app.include_router(messaging.router)
 
 
 @app.get("/health")
