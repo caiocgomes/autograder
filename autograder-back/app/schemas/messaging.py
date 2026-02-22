@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
+from datetime import datetime
 import re
 
 
@@ -47,7 +48,64 @@ class BulkSendRequest(BaseModel):
 
 
 class BulkSendResponse(BaseModel):
+    campaign_id: int
     task_id: str
     total_recipients: int
     skipped_no_phone: int
     skipped_users: List[SkippedUser] = []
+
+
+class RecipientStatusOut(BaseModel):
+    user_id: int
+    name: Optional[str] = None
+    phone: str
+    status: str
+    resolved_message: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CampaignOut(BaseModel):
+    id: int
+    message_template: str
+    course_name: Optional[str] = None
+    total_recipients: int
+    sent_count: int
+    failed_count: int
+    status: str
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+    @field_validator("message_template", mode="before")
+    @classmethod
+    def truncate_template(cls, v: str) -> str:
+        if v and len(v) > 100:
+            return v[:100] + "..."
+        return v
+
+
+class CampaignDetailOut(BaseModel):
+    id: int
+    message_template: str
+    course_name: Optional[str] = None
+    total_recipients: int
+    sent_count: int
+    failed_count: int
+    status: str
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    recipients: List[RecipientStatusOut] = []
+
+    class Config:
+        from_attributes = True
+
+
+class RetryResponse(BaseModel):
+    retrying: int
+    campaign_id: int

@@ -25,6 +25,7 @@ from .event import Event, EventStatus
 from .student_course_status import StudentCourseStatus
 from .hotmart_buyer import HotmartBuyer
 from .hotmart_product_mapping import HotmartProductMapping
+from .message_campaign import MessageCampaign, MessageRecipient, CampaignStatus, RecipientStatus
 
 __all__ = [
     "Base",
@@ -58,4 +59,8 @@ __all__ = [
     "StudentCourseStatus",
     "HotmartBuyer",
     "HotmartProductMapping",
+    "MessageCampaign",
+    "MessageRecipient",
+    "CampaignStatus",
+    "RecipientStatus",
 ]

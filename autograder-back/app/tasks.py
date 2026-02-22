@@ -1608,13 +1608,18 @@ def resolve_template(template: str, variables: Dict[str, str]) -> str:
 
 
 @celery_app.task(name="app.tasks.send_bulk_messages")
-def send_bulk_messages(recipients: List[Dict[str, Any]], message_template: str) -> Dict[str, int]:
+def send_bulk_messages(
+    campaign_id: int,
+    message_template: str,
+    only_pending: bool = False,
+) -> Dict[str, int]:
     """
-    Send a WhatsApp message to each recipient with throttling.
+    Send WhatsApp messages for a campaign with throttling and progressive DB updates.
 
     Args:
-        recipients: list of dicts with keys: user_id, phone, name, email, class_name
+        campaign_id: ID of the MessageCampaign to process
         message_template: message with {nome}, {primeiro_nome}, {email}, {turma} placeholders
+        only_pending: if True, only process recipients with status=pending (used for retry)
 
     Returns:
         dict with sent, failed, total counts
@@ -1622,32 +1627,107 @@ def send_bulk_messages(recipients: List[Dict[str, Any]], message_template: str) 
     import time as _time
     import random as _random
     import logging as _logging
+    from datetime import datetime, timezone
     from app.integrations import evolution as _evo
+    from app.database import SessionLocal
+    from app.models.message_campaign import (
+        MessageCampaign,
+        MessageRecipient,
+        CampaignStatus,
+        RecipientStatus,
+    )
 
     _log = _logging.getLogger(__name__)
-    sent = 0
-    failed = 0
+    db = SessionLocal()
 
-    for i, recipient in enumerate(recipients):
-        variables = {
-            "nome": recipient.get("name", ""),
-            "primeiro_nome": recipient.get("name", "").split("@")[0].split()[0] if recipient.get("name") else "",
-            "email": recipient.get("email", ""),
-            "turma": recipient.get("class_name", ""),
-        }
-        message = resolve_template(message_template, variables)
+    try:
+        campaign = db.query(MessageCampaign).filter(MessageCampaign.id == campaign_id).first()
+        if not campaign:
+            _log.error("send_bulk_messages: campaign %d not found", campaign_id)
+            return {"sent": 0, "failed": 0, "total": 0}
 
-        success = _evo.send_message(recipient["phone"], message)
-        if success:
-            sent += 1
+        pending_recipients = (
+            db.query(MessageRecipient)
+            .filter(
+                MessageRecipient.campaign_id == campaign_id,
+                MessageRecipient.status == RecipientStatus.PENDING,
+            )
+            .all()
+        )
+
+        if not pending_recipients:
+            _log.warning("send_bulk_messages: no pending recipients for campaign %d", campaign_id)
+            return {"sent": 0, "failed": 0, "total": 0}
+
+        sent = 0
+        failed = 0
+
+        for i, recipient in enumerate(pending_recipients):
+            name = recipient.name or ""
+            variables = {
+                "nome": name,
+                "primeiro_nome": name.split("@")[0].split()[0] if name else "",
+                "email": "",
+                "turma": campaign.course_name or "",
+            }
+            message = resolve_template(message_template, variables)
+
+            recipient.resolved_message = message
+
+            success = _evo.send_message(recipient.phone, message)
+            now = datetime.now(timezone.utc)
+
+            if success:
+                recipient.status = RecipientStatus.SENT
+                recipient.sent_at = now
+                campaign.sent_count += 1
+                sent += 1
+            else:
+                recipient.status = RecipientStatus.FAILED
+                recipient.error_message = "send_message returned False"
+                campaign.failed_count += 1
+                failed += 1
+
+            db.commit()
+
+            # Throttle between sends
+            if i < len(pending_recipients) - 1:
+                delay = _random.uniform(10, 30)
+                _log.info(
+                    "Throttle: waiting %.1fs before next send (%d/%d)",
+                    delay, i + 1, len(pending_recipients),
+                )
+                _time.sleep(delay)
+
+        # Set final campaign status
+        now = datetime.now(timezone.utc)
+        if campaign.failed_count == 0:
+            campaign.status = CampaignStatus.COMPLETED
+        elif campaign.sent_count > 0:
+            campaign.status = CampaignStatus.PARTIAL_FAILURE
         else:
-            failed += 1
+            campaign.status = CampaignStatus.FAILED
+        campaign.completed_at = now
+        db.commit()
 
-        # Throttle: random 10-30s between sends to avoid WhatsApp anti-spam
-        if i < len(recipients) - 1:
-            delay = _random.uniform(10, 30)
-            _log.info("Throttle: waiting %.1fs before next send (%d/%d)", delay, i + 1, len(recipients))
-            _time.sleep(delay)
+        _log.info(
+            "send_bulk_messages: campaign=%d sent=%d failed=%d total=%d status=%s",
+            campaign_id, sent, failed, len(pending_recipients), campaign.status.value,
+        )
+        return {"sent": sent, "failed": failed, "total": len(pending_recipients)}
 
-    _log.info("send_bulk_messages: sent=%d failed=%d total=%d", sent, failed, len(recipients))
-    return {"sent": sent, "failed": failed, "total": len(recipients)}
+    except Exception as e:
+        db.rollback()
+        _log.error("send_bulk_messages: fatal error for campaign %d: %s", campaign_id, e)
+        try:
+            campaign = db.query(MessageCampaign).filter(MessageCampaign.id == campaign_id).first()
+            if campaign:
+                campaign.status = CampaignStatus.FAILED
+                campaign.completed_at = datetime.now(timezone.utc)
+                db.commit()
+        except Exception:
+            _log.error("send_bulk_messages: failed to mark campaign %d as failed", campaign_id)
+        return {"sent": 0, "failed": 0, "total": 0, "error": str(e)}
+
+    finally:
+        db.close()

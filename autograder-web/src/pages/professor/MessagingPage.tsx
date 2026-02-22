@@ -1,10 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { messagingApi } from '../../api/messaging';
-import type { Course, Recipient } from '../../api/messaging';
+import type { Course, Recipient, Campaign } from '../../api/messaging';
 
 const TAGS = ['{nome}', '{primeiro_nome}', '{email}', '{turma}'];
 
+const STATUS_LABELS: Record<string, { label: string; color: string; bg: string }> = {
+  sending: { label: 'Enviando', color: '#d97706', bg: '#fef3c7' },
+  completed: { label: 'Completo', color: '#166534', bg: '#dcfce7' },
+  partial_failure: { label: 'Falhas parciais', color: '#c2410c', bg: '#fff7ed' },
+  failed: { label: 'Falhou', color: '#991b1b', bg: '#fef2f2' },
+};
+
 export function MessagingPage() {
+  const navigate = useNavigate();
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState<number | undefined>();
   const [selectedCourseName, setSelectedCourseName] = useState('');
@@ -17,10 +26,24 @@ export function MessagingPage() {
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load courses on mount
+  // Campaigns
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [isLoadingCampaigns, setIsLoadingCampaigns] = useState(false);
+
+  // Load courses and campaigns on mount
   useEffect(() => {
     messagingApi.getCourses().then(setCourses).catch(() => setError('Erro ao carregar cursos'));
+    loadCampaigns();
   }, []);
+
+  const loadCampaigns = () => {
+    setIsLoadingCampaigns(true);
+    messagingApi
+      .getCampaigns({ limit: 20 })
+      .then(setCampaigns)
+      .catch(() => {})
+      .finally(() => setIsLoadingCampaigns(false));
+  };
 
   // Load recipients when course changes
   useEffect(() => {
@@ -82,7 +105,6 @@ export function MessagingPage() {
   const selectedWithWhatsapp = selectedRecipients.filter((r) => r.has_whatsapp);
   const selectedWithoutWhatsapp = selectedRecipients.filter((r) => !r.has_whatsapp);
 
-  // Preview: resolve template for first selected recipient
   const previewRecipient = selectedWithWhatsapp[0];
   const previewMessage = previewRecipient
     ? messageTemplate
@@ -112,16 +134,18 @@ export function MessagingPage() {
         message_template: messageTemplate,
         course_id: selectedCourseId,
       });
-      const skippedMsg = result.skipped_no_phone > 0
-        ? ` ${result.skipped_no_phone} aluno(s) sem WhatsApp foram ignorados.`
-        : '';
-      setFeedback(`Mensagem enfileirada para ${result.total_recipients} destinatário(s).${skippedMsg}`);
+      navigate(`/professor/messaging/campaigns/${result.campaign_id}`);
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
       setError(typeof detail === 'string' ? detail : 'Erro ao enviar mensagem');
     } finally {
       setIsSending(false);
     }
+  };
+
+  const formatDate = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   };
 
   return (
@@ -289,6 +313,7 @@ export function MessagingPage() {
           borderRadius: '4px',
           cursor: canSend && !isSending ? 'pointer' : 'not-allowed',
           fontSize: '16px',
+          marginBottom: '30px',
         }}
       >
         {isSending
@@ -297,6 +322,73 @@ export function MessagingPage() {
           ? `Enviar para ${selectedWithWhatsapp.length} aluno(s)`
           : 'Enviar'}
       </button>
+
+      {/* Campanhas recentes */}
+      <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px' }}>
+        <h3 style={{ margin: '0 0 15px', fontSize: '16px', color: '#2c3e50' }}>Envios recentes</h3>
+
+        {isLoadingCampaigns ? (
+          <div style={{ padding: '20px', textAlign: 'center', color: '#7f8c8d' }}>Carregando...</div>
+        ) : campaigns.length === 0 ? (
+          <div style={{ padding: '20px', textAlign: 'center', color: '#7f8c8d' }}>Nenhum envio registrado</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+            <thead>
+              <tr style={{ borderBottom: '2px solid #ecf0f1', textAlign: 'left' }}>
+                <th style={{ padding: '8px 12px' }}>Mensagem</th>
+                <th style={{ padding: '8px 12px' }}>Curso</th>
+                <th style={{ padding: '8px 12px' }}>Progresso</th>
+                <th style={{ padding: '8px 12px' }}>Status</th>
+                <th style={{ padding: '8px 12px' }}>Data</th>
+              </tr>
+            </thead>
+            <tbody>
+              {campaigns.map((c) => {
+                const statusInfo = STATUS_LABELS[c.status] || { label: c.status, color: '#666', bg: '#f0f0f0' };
+                return (
+                  <tr
+                    key={c.id}
+                    onClick={() => navigate(`/professor/messaging/campaigns/${c.id}`)}
+                    style={{ borderBottom: '1px solid #ecf0f1', cursor: 'pointer' }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = '#f8f9fa'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'white'; }}
+                  >
+                    <td style={{ padding: '10px 12px', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {c.message_template}
+                    </td>
+                    <td style={{ padding: '10px 12px', color: '#7f8c8d' }}>{c.course_name || '-'}</td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{ fontWeight: 500 }}>{c.sent_count}</span>
+                      <span style={{ color: '#7f8c8d' }}>/{c.total_recipients}</span>
+                      {c.failed_count > 0 && (
+                        <span style={{ color: '#e74c3c', marginLeft: '4px', fontSize: '12px' }}>
+                          ({c.failed_count} falha{c.failed_count > 1 ? 's' : ''})
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{
+                        display: 'inline-block',
+                        padding: '2px 8px',
+                        borderRadius: '12px',
+                        fontSize: '12px',
+                        fontWeight: 500,
+                        color: statusInfo.color,
+                        backgroundColor: statusInfo.bg,
+                      }}>
+                        {statusInfo.label}
+                      </span>
+                    </td>
+                    <td style={{ padding: '10px 12px', color: '#7f8c8d', fontSize: '13px' }}>
+                      {formatDate(c.created_at)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
