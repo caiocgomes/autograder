@@ -15,6 +15,8 @@ const apiPrefixes = [
   '/products',
   '/admin',
   '/messaging',
+  '/onboarding',
+  '/admin-templates',
   '/docs',
   '/openapi.json',
 ]
