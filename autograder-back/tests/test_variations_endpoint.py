@@ -27,7 +27,10 @@ def test_variations_success(mock_gen, client_with_admin):
     assert len(data["variations"]) == 3
     assert data["original"] == "Olá {nome}! Aula amanhã."
     assert data["warning"] is None
-    mock_gen.assert_called_once_with("Olá {nome}! Aula amanhã.", 3)
+    mock_gen.assert_called_once()
+    args = mock_gen.call_args[0]
+    assert args[0] == "Olá {nome}! Aula amanhã."
+    assert args[1] == 3
 
 
 @patch("app.routers.messaging.generate_variations")
@@ -42,7 +45,10 @@ def test_variations_default_count(mock_gen, client_with_admin):
     })
 
     assert resp.status_code == 200
-    mock_gen.assert_called_once_with("Olá {nome}!", 6)
+    mock_gen.assert_called_once()
+    args = mock_gen.call_args[0]
+    assert args[0] == "Olá {nome}!"
+    assert args[1] == 6
 
 
 def test_variations_rejects_empty_template(client_with_admin):

@@ -5,8 +5,9 @@ import re
 from typing import List
 
 import anthropic
+from sqlalchemy.orm import Session
 
-from app.config import settings
+from app.services.settings import get_llm_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,10 @@ def _extract_placeholders(template: str) -> set:
     return set(re.findall(r"\{(\w+)\}", template))
 
 
-def _call_haiku(template: str, num_variations: int) -> List[str]:
+def _call_haiku(template: str, num_variations: int, db: Session) -> List[str]:
     """Call Anthropic Haiku to generate variations. Returns raw parsed list."""
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    api_key = get_llm_api_key("anthropic", db)
+    client = anthropic.Anthropic(api_key=api_key)
 
     user_message = (
         f"Gere exatamente {num_variations} variações da seguinte mensagem:\n\n"
@@ -79,13 +81,14 @@ def _validate_variations(
     return valid
 
 
-def generate_variations(template: str, num_variations: int) -> List[str]:
+def generate_variations(template: str, num_variations: int, db: Session) -> List[str]:
     """
     Generate message variations using Anthropic Haiku.
 
     Args:
         template: message template with optional {placeholders}
         num_variations: number of variations to generate (3-10)
+        db: database session for resolving API key
 
     Returns:
         List of variation strings with placeholders preserved.
@@ -97,7 +100,7 @@ def generate_variations(template: str, num_variations: int) -> List[str]:
     """
     required_placeholders = _extract_placeholders(template)
 
-    raw = _call_haiku(template, num_variations)
+    raw = _call_haiku(template, num_variations, db)
     valid = _validate_variations(raw, required_placeholders)
 
     # Retry once if we don't have enough valid variations
@@ -107,7 +110,7 @@ def generate_variations(template: str, num_variations: int) -> List[str]:
             "generate_variations: got %d/%d valid, retrying for %d more",
             len(valid), num_variations, missing,
         )
-        retry_raw = _call_haiku(template, missing + 2)  # ask for a few extra
+        retry_raw = _call_haiku(template, missing + 2, db)  # ask for a few extra
         retry_valid = _validate_variations(retry_raw, required_placeholders)
         valid.extend(retry_valid)
 

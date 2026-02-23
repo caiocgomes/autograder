@@ -27,6 +27,7 @@ from .hotmart_buyer import HotmartBuyer
 from .hotmart_product_mapping import HotmartProductMapping
 from .message_campaign import MessageCampaign, MessageRecipient, CampaignStatus, RecipientStatus
 from .message_template import MessageTemplate, TemplateEventType
+from .system_settings import SystemSettings
 
 __all__ = [
     "Base",
@@ -66,4 +67,5 @@ __all__ = [
     "RecipientStatus",
     "MessageTemplate",
     "TemplateEventType",
+    "SystemSettings",
 ]
