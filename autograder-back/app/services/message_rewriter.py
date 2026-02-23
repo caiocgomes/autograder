@@ -42,18 +42,36 @@ def _call_haiku(template: str, num_variations: int, db: Session) -> List[str]:
         f"Responda com um JSON array de {num_variations} strings."
     )
 
+    # Scale max_tokens based on template length: each variation ≈ template size,
+    # plus JSON overhead. Minimum 2048, cap at 16384.
+    estimated_tokens = max(2048, len(template) * num_variations * 2)
+    estimated_tokens = min(estimated_tokens, 16384)
+
     response = client.messages.create(
         model=HAIKU_MODEL,
-        max_tokens=2048,
+        max_tokens=estimated_tokens,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     )
 
+    if response.stop_reason == "max_tokens":
+        raise ValueError(
+            "LLM response truncated (max_tokens reached). "
+            "Template may be too long for the requested number of variations."
+        )
+
     raw_text = response.content[0].text.strip()
+
+    # Strip markdown code fences that LLMs often wrap around JSON
+    if raw_text.startswith("```"):
+        raw_text = re.sub(r"^```(?:json)?\s*\n?", "", raw_text)
+        raw_text = re.sub(r"\n?```\s*$", "", raw_text)
+        raw_text = raw_text.strip()
 
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError:
+        logger.error("LLM raw response that failed parsing: %r", raw_text)
         raise ValueError(
             f"LLM retornou resposta em formato inesperado (não é JSON válido)"
         )
