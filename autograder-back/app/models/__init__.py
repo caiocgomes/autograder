@@ -26,6 +26,7 @@ from .student_course_status import StudentCourseStatus
 from .hotmart_buyer import HotmartBuyer
 from .hotmart_product_mapping import HotmartProductMapping
 from .message_campaign import MessageCampaign, MessageRecipient, CampaignStatus, RecipientStatus
+from .message_template import MessageTemplate, TemplateEventType
 
 __all__ = [
     "Base",
@@ -63,4 +64,6 @@ __all__ = [
     "MessageRecipient",
     "CampaignStatus",
     "RecipientStatus",
+    "MessageTemplate",
+    "TemplateEventType",
 ]

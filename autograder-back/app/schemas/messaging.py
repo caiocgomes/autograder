@@ -4,7 +4,7 @@ from datetime import datetime
 import re
 
 
-ALLOWED_VARIABLES = {"nome", "primeiro_nome", "email", "turma"}
+ALLOWED_VARIABLES = {"nome", "primeiro_nome", "email", "turma", "token"}
 
 
 def _validate_template_vars(v: str) -> str:
