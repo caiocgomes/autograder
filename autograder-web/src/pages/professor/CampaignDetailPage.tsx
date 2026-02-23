@@ -90,7 +90,7 @@ export function CampaignDetailPage() {
   if (error || !campaign) {
     return (
       <div>
-        <button onClick={() => navigate('/professor/messaging')} style={backButtonStyle}>Voltar</button>
+        <button onClick={() => navigate('/professor/envios')} style={backButtonStyle}>Voltar</button>
         <div style={{ color: '#c00', padding: '20px', backgroundColor: '#fef2f2', borderRadius: '4px' }}>
           {error || 'Campanha não encontrada'}
         </div>
@@ -110,7 +110,7 @@ export function CampaignDetailPage() {
 
   return (
     <div>
-      <button onClick={() => navigate('/professor/messaging')} style={backButtonStyle}>Voltar</button>
+      <button onClick={() => navigate('/professor/envios')} style={backButtonStyle}>Voltar</button>
 
       <h1 style={{ margin: '0 0 20px', fontSize: '20px' }}>Detalhe do envio #{campaign.id}</h1>
 

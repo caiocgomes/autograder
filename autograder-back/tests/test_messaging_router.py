@@ -1,7 +1,7 @@
 """Tests for messaging router — bulk WhatsApp messaging endpoints."""
 import pytest
 from unittest.mock import Mock, MagicMock, patch
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, LifecycleStatus
 from app.models.product import Product
 from app.models.hotmart_buyer import HotmartBuyer
 from app.models.hotmart_product_mapping import HotmartProductMapping
@@ -99,6 +99,63 @@ def test_list_recipients_403_for_student(client_with_student):
     client, db, student = client_with_student
     resp = client.get("/messaging/recipients?course_id=1")
     assert resp.status_code == 403
+
+
+def test_list_recipients_filtered_by_lifecycle_status(client_with_admin):
+    """GIVEN students with different lifecycle_status, WHEN admin filters by pending_onboarding, THEN returns only matching."""
+    client, db, admin = client_with_admin
+
+    course = Mock(spec=Product)
+    course.id = 1
+
+    user_pending = Mock(spec=User, id=10, email="pending@test.com", whatsapp_number="5511999990001", lifecycle_status=LifecycleStatus.PENDING_ONBOARDING)
+
+    call_count = {"n": 0}
+
+    def mock_query(*args):
+        call_count["n"] += 1
+        result = MagicMock()
+        if call_count["n"] == 1:
+            result.filter.return_value.first.return_value = course
+        elif call_count["n"] == 2:
+            result.filter.return_value.all.return_value = [("4141338",)]
+        else:
+            result.join.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = [
+                (user_pending, "Pending User")
+            ]
+        return result
+
+    db.query = mock_query
+
+    resp = client.get("/messaging/recipients?course_id=1&lifecycle_status=pending_onboarding")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "Pending User"
+
+
+def test_list_recipients_invalid_lifecycle_status(client_with_admin):
+    """GIVEN invalid lifecycle_status, WHEN admin filters, THEN 422."""
+    client, db, admin = client_with_admin
+
+    course = Mock(spec=Product)
+    course.id = 1
+
+    call_count = {"n": 0}
+
+    def mock_query(*args):
+        call_count["n"] += 1
+        result = MagicMock()
+        if call_count["n"] == 1:
+            result.filter.return_value.first.return_value = course
+        elif call_count["n"] == 2:
+            result.filter.return_value.all.return_value = [("4141338",)]
+        return result
+
+    db.query = mock_query
+
+    resp = client.get("/messaging/recipients?course_id=1&lifecycle_status=banana")
+    assert resp.status_code == 422
 
 
 def test_list_recipients_403_for_professor(client_with_professor):

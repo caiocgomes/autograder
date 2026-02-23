@@ -12,8 +12,7 @@ export function ProfessorLayout() {
     { path: '/professor/exercises', label: 'Exercises' },
     { path: '/professor/grades', label: 'Grades' },
     ...(user?.role === 'admin' ? [
-      { path: '/professor/messaging', label: 'Mensagens' },
-      { path: '/professor/onboarding', label: 'Onboarding' },
+      { path: '/professor/envios', label: 'Envios' },
       { path: '/professor/settings', label: 'Configuracoes' },
     ] : []),
   ];
