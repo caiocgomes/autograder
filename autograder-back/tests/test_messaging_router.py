@@ -284,6 +284,82 @@ def test_send_403_for_professor(client_with_professor):
     assert resp.status_code == 403
 
 
+# ── POST /messaging/send with variations ─────────────────────────────────
+
+
+def test_send_bulk_with_variations(client_with_admin):
+    """GIVEN variations provided, WHEN admin sends, THEN 202 and celery receives variations."""
+    client, db, admin = client_with_admin
+
+    users = []
+    for i in range(3):
+        u = Mock(spec=User)
+        u.id = i + 1
+        u.email = f"user{i}@test.com"
+        u.whatsapp_number = f"551199999000{i}"
+        users.append(u)
+
+    _setup_send_mocks(db, users)
+
+    with patch("app.routers.messaging.celery_app") as mock_celery:
+        mock_task = Mock()
+        mock_task.id = "task-var-123"
+        mock_celery.send_task.return_value = mock_task
+
+        resp = client.post("/messaging/send", json={
+            "user_ids": [1, 2, 3],
+            "message_template": "Olá {nome}!",
+            "variations": ["Oi {nome}!", "E aí {nome}!", "Fala {nome}!"],
+        })
+
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["campaign_id"] == 42
+    assert data["total_recipients"] == 3
+
+    # Verify celery was called with variations in kwargs
+    call_args = mock_celery.send_task.call_args
+    assert call_args[1]["kwargs"]["variations"] == ["Oi {nome}!", "E aí {nome}!", "Fala {nome}!"]
+
+
+def test_send_bulk_without_variations_backwards_compatible(client_with_admin):
+    """GIVEN no variations, WHEN admin sends, THEN celery called without variations (backwards compat)."""
+    client, db, admin = client_with_admin
+
+    users = [Mock(spec=User, id=1, email="u@test.com", whatsapp_number="5511999990001")]
+    _setup_send_mocks(db, users)
+
+    with patch("app.routers.messaging.celery_app") as mock_celery:
+        mock_task = Mock()
+        mock_task.id = "task-no-var"
+        mock_celery.send_task.return_value = mock_task
+
+        resp = client.post("/messaging/send", json={
+            "user_ids": [1],
+            "message_template": "Hello!",
+        })
+
+    assert resp.status_code == 202
+
+    call_args = mock_celery.send_task.call_args
+    # variations should be None or not in kwargs
+    variations = call_args[1].get("kwargs", {}).get("variations")
+    assert variations is None
+
+
+def test_send_rejects_variation_with_unknown_variable(client_with_admin):
+    """GIVEN variation with unknown variable, WHEN admin sends, THEN 422."""
+    client, db, admin = client_with_admin
+
+    resp = client.post("/messaging/send", json={
+        "user_ids": [1],
+        "message_template": "Olá {nome}!",
+        "variations": ["Oi {nome}!", "Saldo: {saldo}"],
+    })
+
+    assert resp.status_code == 422
+
+
 # ── GET /messaging/campaigns ────────────────────────────────────────────
 
 

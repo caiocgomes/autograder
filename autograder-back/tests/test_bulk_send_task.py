@@ -311,6 +311,122 @@ def test_resolved_message_persisted(mock_session_cls, mock_send):
     assert recipient.resolved_message == "Olá João Silva, turma ML Avançado"
 
 
+# ── send_bulk_messages with variations ───────────────────────────────────
+
+
+@patch("app.integrations.evolution.send_message")
+@patch("app.database.SessionLocal")
+def test_send_with_variations_uses_random_choice(mock_session_cls, mock_send):
+    """GIVEN variations provided, WHEN task runs, THEN each recipient gets a variation via random.choice."""
+    mock_send.return_value = True
+    db = MagicMock()
+    mock_session_cls.return_value = db
+
+    campaign = _make_mock_campaign(total=3)
+    recipients = [
+        _make_mock_recipient(1, "5511999990001", "João"),
+        _make_mock_recipient(2, "5511999990002", "Maria"),
+        _make_mock_recipient(3, "5511999990003", "Pedro"),
+    ]
+
+    call_count = {"n": 0}
+
+    def mock_query(*args):
+        call_count["n"] += 1
+        result = MagicMock()
+        if call_count["n"] == 1:
+            result.filter.return_value.first.return_value = campaign
+        elif call_count["n"] == 2:
+            result.filter.return_value.all.return_value = recipients
+        else:
+            result.filter.return_value.first.return_value = campaign
+        return result
+
+    db.query = mock_query
+
+    variations = ["Oi {nome}!", "E aí {nome}!", "Fala {nome}!"]
+
+    with patch("time.sleep"), patch("random.uniform", return_value=15.0):
+        result = send_bulk_messages(42, "Olá {nome}!", variations=variations)
+
+    assert result["sent"] == 3
+
+    # Each recipient should have a resolved_message from one of the variations
+    for r in recipients:
+        assert r.resolved_message is not None
+        # The resolved message should be from a variation, not the original template
+        name = r.name
+        possible = [f"Oi {name}!", f"E aí {name}!", f"Fala {name}!"]
+        assert r.resolved_message in possible, f"Got '{r.resolved_message}', expected one of {possible}"
+
+
+@patch("app.integrations.evolution.send_message")
+@patch("app.database.SessionLocal")
+def test_send_without_variations_uses_template(mock_session_cls, mock_send):
+    """GIVEN no variations, WHEN task runs, THEN uses message_template (backwards compat)."""
+    mock_send.return_value = True
+    db = MagicMock()
+    mock_session_cls.return_value = db
+
+    campaign = _make_mock_campaign(total=1, course_name="Python")
+    recipient = _make_mock_recipient(1, "5511999990001", "João")
+
+    call_count = {"n": 0}
+
+    def mock_query(*args):
+        call_count["n"] += 1
+        result = MagicMock()
+        if call_count["n"] == 1:
+            result.filter.return_value.first.return_value = campaign
+        elif call_count["n"] == 2:
+            result.filter.return_value.all.return_value = [recipient]
+        else:
+            result.filter.return_value.first.return_value = campaign
+        return result
+
+    db.query = mock_query
+
+    with patch("time.sleep"):
+        send_bulk_messages(42, "Olá {nome}!")
+
+    assert recipient.resolved_message == "Olá João!"
+
+
+@patch("app.integrations.evolution.send_message")
+@patch("app.database.SessionLocal")
+def test_send_with_empty_variations_uses_template(mock_session_cls, mock_send):
+    """GIVEN empty variations list, WHEN task runs, THEN falls back to message_template."""
+    mock_send.return_value = True
+    db = MagicMock()
+    mock_session_cls.return_value = db
+
+    campaign = _make_mock_campaign(total=1, course_name="Python")
+    recipient = _make_mock_recipient(1, "5511999990001", "João")
+
+    call_count = {"n": 0}
+
+    def mock_query(*args):
+        call_count["n"] += 1
+        result = MagicMock()
+        if call_count["n"] == 1:
+            result.filter.return_value.first.return_value = campaign
+        elif call_count["n"] == 2:
+            result.filter.return_value.all.return_value = [recipient]
+        else:
+            result.filter.return_value.first.return_value = campaign
+        return result
+
+    db.query = mock_query
+
+    with patch("time.sleep"):
+        send_bulk_messages(42, "Olá {nome}!", variations=[])
+
+    assert recipient.resolved_message == "Olá João!"
+
+
+# ── db commit behavior ──────────────────────────────────────────────────
+
+
 @patch("app.integrations.evolution.send_message")
 @patch("app.database.SessionLocal")
 def test_db_commit_called_per_recipient(mock_session_cls, mock_send):

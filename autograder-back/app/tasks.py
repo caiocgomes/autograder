@@ -1612,6 +1612,7 @@ def send_bulk_messages(
     campaign_id: int,
     message_template: str,
     only_pending: bool = False,
+    variations: Optional[List[str]] = None,
 ) -> Dict[str, int]:
     """
     Send WhatsApp messages for a campaign with throttling and progressive DB updates.
@@ -1620,6 +1621,8 @@ def send_bulk_messages(
         campaign_id: ID of the MessageCampaign to process
         message_template: message with {nome}, {primeiro_nome}, {email}, {turma} placeholders
         only_pending: if True, only process recipients with status=pending (used for retry)
+        variations: optional list of approved message variations; when provided, each
+            recipient gets a randomly chosen variation instead of the template
 
     Returns:
         dict with sent, failed, total counts
@@ -1662,6 +1665,9 @@ def send_bulk_messages(
         sent = 0
         failed = 0
 
+        # Use variations if provided, otherwise fall back to message_template
+        _use_variations = bool(variations)
+
         for i, recipient in enumerate(pending_recipients):
             name = recipient.name or ""
             variables = {
@@ -1670,7 +1676,12 @@ def send_bulk_messages(
                 "email": "",
                 "turma": campaign.course_name or "",
             }
-            message = resolve_template(message_template, variables)
+
+            if _use_variations:
+                chosen_template = _random.choice(variations)
+            else:
+                chosen_template = message_template
+            message = resolve_template(chosen_template, variables)
 
             recipient.resolved_message = message
 

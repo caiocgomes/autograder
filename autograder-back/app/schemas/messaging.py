@@ -7,6 +7,15 @@ import re
 ALLOWED_VARIABLES = {"nome", "primeiro_nome", "email", "turma"}
 
 
+def _validate_template_vars(v: str) -> str:
+    """Validate that a template string only uses allowed variables."""
+    found = set(re.findall(r"\{(\w+)\}", v))
+    unknown = found - ALLOWED_VARIABLES
+    if unknown:
+        raise ValueError(f"Variáveis inválidas: {sorted(unknown)}. Permitidas: {sorted(ALLOWED_VARIABLES)}")
+    return v
+
+
 class CourseOut(BaseModel):
     id: int
     name: str
@@ -37,13 +46,19 @@ class BulkSendRequest(BaseModel):
     message_template: str = Field(..., min_length=1)
     course_id: Optional[int] = None
 
+    variations: Optional[List[str]] = None
+
     @field_validator("message_template")
     @classmethod
     def validate_template_variables(cls, v: str) -> str:
-        found = set(re.findall(r"\{(\w+)\}", v))
-        unknown = found - ALLOWED_VARIABLES
-        if unknown:
-            raise ValueError(f"Variáveis inválidas: {sorted(unknown)}. Permitidas: {sorted(ALLOWED_VARIABLES)}")
+        return _validate_template_vars(v)
+
+    @field_validator("variations")
+    @classmethod
+    def validate_variation_variables(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is not None:
+            for variation in v:
+                _validate_template_vars(variation)
         return v
 
 
@@ -109,3 +124,19 @@ class CampaignDetailOut(BaseModel):
 class RetryResponse(BaseModel):
     retrying: int
     campaign_id: int
+
+
+class VariationRequest(BaseModel):
+    message_template: str = Field(..., min_length=1)
+    num_variations: int = Field(default=6, ge=3, le=10)
+
+    @field_validator("message_template")
+    @classmethod
+    def validate_template_variables(cls, v: str) -> str:
+        return _validate_template_vars(v)
+
+
+class VariationResponse(BaseModel):
+    variations: List[str]
+    original: str
+    warning: Optional[str] = None
