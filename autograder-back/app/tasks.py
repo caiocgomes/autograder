@@ -424,6 +424,7 @@ def llm_evaluate_submission(self, submission_id: int):
 
         # Call LLM API
         from app.config import settings
+        from app.services.settings import get_llm_api_key
         import anthropic
         import openai
         import json
@@ -431,9 +432,9 @@ def llm_evaluate_submission(self, submission_id: int):
         prompt = create_llm_prompt(exercise, submission.code)
 
         try:
-            if settings.llm_provider == "anthropic" and settings.anthropic_api_key:
-                # Use Anthropic Claude
-                client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            if settings.llm_provider == "anthropic":
+                api_key = get_llm_api_key("anthropic", db)
+                client = anthropic.Anthropic(api_key=api_key)
                 message = client.messages.create(
                     model="claude-3-5-sonnet-20241022",
                     max_tokens=1024,
@@ -443,9 +444,9 @@ def llm_evaluate_submission(self, submission_id: int):
                 )
                 response_text = message.content[0].text
 
-            elif settings.llm_provider == "openai" and settings.openai_api_key:
-                # Use OpenAI GPT
-                client = openai.OpenAI(api_key=settings.openai_api_key)
+            elif settings.llm_provider == "openai":
+                api_key = get_llm_api_key("openai", db)
+                client = openai.OpenAI(api_key=api_key)
                 response = client.chat.completions.create(
                     model="gpt-4",
                     messages=[
@@ -647,20 +648,23 @@ def parse_rubric_response(response_text, expected_dimensions):
     return result
 
 
-def _call_llm(prompt, image_path=None):
+def _call_llm(prompt, image_path=None, db=None):
     """
     Call configured LLM provider. Returns response text.
 
     Args:
         prompt: Text prompt or list of content blocks (multimodal)
         image_path: Path to image file for multimodal input (Anthropic)
+        db: Database session for resolving API key from system settings
     """
     from app.config import settings
+    from app.services.settings import get_llm_api_key
     import anthropic
     import openai
 
-    if settings.llm_provider == "anthropic" and settings.anthropic_api_key:
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    if settings.llm_provider == "anthropic":
+        api_key = get_llm_api_key("anthropic", db) if db else settings.anthropic_api_key
+        client = anthropic.Anthropic(api_key=api_key)
 
         if image_path:
             import base64
@@ -690,8 +694,9 @@ def _call_llm(prompt, image_path=None):
             )
         return message.content[0].text
 
-    elif settings.llm_provider == "openai" and settings.openai_api_key:
-        client = openai.OpenAI(api_key=settings.openai_api_key)
+    elif settings.llm_provider == "openai":
+        api_key = get_llm_api_key("openai", db) if db else settings.openai_api_key
+        client = openai.OpenAI(api_key=api_key)
 
         messages_content = []
         if image_path:
@@ -861,6 +866,7 @@ def grade_llm_first(self, submission_id: int, late_penalty: float = 0.0):
                 response_text = _call_llm(
                     prompt if not is_image else prompt,
                     image_path=image_path if is_image else None,
+                    db=db,
                 )
                 parsed = parse_rubric_response(response_text, rubric_dims)
                 break

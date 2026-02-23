@@ -3,12 +3,16 @@ import pytest
 import json
 from unittest.mock import patch, Mock, MagicMock
 
+_mock_db = MagicMock()
+_KEY_PATCH = patch("app.services.message_rewriter.get_llm_api_key", return_value="sk-test")
+
 
 # ── generate_variations ─────────────────────────────────────────────────
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_returns_list(mock_anthropic):
+def test_generate_variations_returns_list(mock_anthropic, _mock_key):
     """GIVEN valid template, WHEN generate_variations called, THEN returns list of strings."""
     from app.services.message_rewriter import generate_variations
 
@@ -23,7 +27,7 @@ def test_generate_variations_returns_list(mock_anthropic):
     mock_response.content = [Mock(text=json.dumps(variations))]
     mock_client.messages.create.return_value = mock_response
 
-    result = generate_variations("Olá {nome}! Aula amanhã sobre regressão linear.", 3)
+    result = generate_variations("Olá {nome}! Aula amanhã sobre regressão linear.", 3, _mock_db)
 
     assert isinstance(result, list)
     assert len(result) == 3
@@ -32,8 +36,9 @@ def test_generate_variations_returns_list(mock_anthropic):
         assert "{nome}" in v
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_exact_count(mock_anthropic):
+def test_generate_variations_exact_count(mock_anthropic, _mock_key):
     """GIVEN num_variations=6, WHEN called, THEN returns exactly 6 variations."""
     from app.services.message_rewriter import generate_variations
 
@@ -44,12 +49,13 @@ def test_generate_variations_exact_count(mock_anthropic):
     mock_response.content = [Mock(text=json.dumps(variations))]
     mock_client.messages.create.return_value = mock_response
 
-    result = generate_variations("Olá {nome}!", 6)
+    result = generate_variations("Olá {nome}!", 6, _mock_db)
     assert len(result) == 6
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_preserves_all_placeholders(mock_anthropic):
+def test_generate_variations_preserves_all_placeholders(mock_anthropic, _mock_key):
     """GIVEN template with {nome}, {turma}, WHEN called, THEN each variation has both."""
     from app.services.message_rewriter import generate_variations
 
@@ -64,15 +70,16 @@ def test_generate_variations_preserves_all_placeholders(mock_anthropic):
     mock_response.content = [Mock(text=json.dumps(variations))]
     mock_client.messages.create.return_value = mock_response
 
-    result = generate_variations("Olá {nome}! Turma {turma} começa amanhã.", 3)
+    result = generate_variations("Olá {nome}! Turma {turma} começa amanhã.", 3, _mock_db)
 
     for v in result:
         assert "{nome}" in v
         assert "{turma}" in v
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_discards_missing_placeholders(mock_anthropic):
+def test_generate_variations_discards_missing_placeholders(mock_anthropic, _mock_key):
     """GIVEN LLM returns variations where some lost placeholders, WHEN validated, THEN invalid ones discarded."""
     from app.services.message_rewriter import generate_variations
 
@@ -97,15 +104,16 @@ def test_generate_variations_discards_missing_placeholders(mock_anthropic):
     resp2.content = [Mock(text=json.dumps(retry_response))]
     mock_client.messages.create.side_effect = [resp1, resp2]
 
-    result = generate_variations("Olá {nome}! Aula amanhã.", 4)
+    result = generate_variations("Olá {nome}! Aula amanhã.", 4, _mock_db)
 
     assert len(result) == 4
     for v in result:
         assert "{nome}" in v
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_returns_partial_if_retry_insufficient(mock_anthropic):
+def test_generate_variations_returns_partial_if_retry_insufficient(mock_anthropic, _mock_key):
     """GIVEN LLM can't produce enough valid variations after retry, THEN returns what's available."""
     from app.services.message_rewriter import generate_variations
 
@@ -128,7 +136,7 @@ def test_generate_variations_returns_partial_if_retry_insufficient(mock_anthropi
     resp2.content = [Mock(text=json.dumps(retry_response))]
     mock_client.messages.create.side_effect = [resp1, resp2]
 
-    result = generate_variations("Olá {nome}! Aula amanhã.", 3)
+    result = generate_variations("Olá {nome}! Aula amanhã.", 3, _mock_db)
 
     # Should return whatever valid ones we got (2 in this case)
     assert len(result) == 2
@@ -136,8 +144,9 @@ def test_generate_variations_returns_partial_if_retry_insufficient(mock_anthropi
         assert "{nome}" in v
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_prompt_includes_template(mock_anthropic):
+def test_generate_variations_prompt_includes_template(mock_anthropic, _mock_key):
     """GIVEN template, WHEN called, THEN prompt sent to Haiku includes the template text."""
     from app.services.message_rewriter import generate_variations
 
@@ -147,7 +156,7 @@ def test_generate_variations_prompt_includes_template(mock_anthropic):
     mock_response.content = [Mock(text='["Oi {nome}!", "E aí {nome}!"]')]
     mock_client.messages.create.return_value = mock_response
 
-    generate_variations("Olá {nome}! Mensagem especial.", 2)
+    generate_variations("Olá {nome}! Mensagem especial.", 2, _mock_db)
 
     call_args = mock_client.messages.create.call_args
     messages = call_args[1]["messages"]
@@ -155,8 +164,9 @@ def test_generate_variations_prompt_includes_template(mock_anthropic):
     assert "Olá {nome}! Mensagem especial." in user_message
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_uses_haiku_model(mock_anthropic):
+def test_generate_variations_uses_haiku_model(mock_anthropic, _mock_key):
     """GIVEN call to generate_variations, WHEN LLM is called, THEN uses Haiku model."""
     from app.services.message_rewriter import generate_variations
 
@@ -166,14 +176,15 @@ def test_generate_variations_uses_haiku_model(mock_anthropic):
     mock_response.content = [Mock(text='["Oi {nome}!"]')]
     mock_client.messages.create.return_value = mock_response
 
-    generate_variations("Olá {nome}!", 1)
+    generate_variations("Olá {nome}!", 1, _mock_db)
 
     call_args = mock_client.messages.create.call_args
     assert "haiku" in call_args[1]["model"]
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_strips_whitespace(mock_anthropic):
+def test_generate_variations_strips_whitespace(mock_anthropic, _mock_key):
     """GIVEN LLM returns variations with extra whitespace, WHEN parsed, THEN stripped."""
     from app.services.message_rewriter import generate_variations
 
@@ -184,14 +195,15 @@ def test_generate_variations_strips_whitespace(mock_anthropic):
     mock_response.content = [Mock(text=json.dumps(variations))]
     mock_client.messages.create.return_value = mock_response
 
-    result = generate_variations("Olá {nome}!", 2)
+    result = generate_variations("Olá {nome}!", 2, _mock_db)
 
     assert result[0] == "Oi {nome}!"
     assert result[1] == "E aí {nome}!"
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_api_error_raises(mock_anthropic):
+def test_generate_variations_api_error_raises(mock_anthropic, _mock_key):
     """GIVEN Anthropic API fails, WHEN called, THEN raises exception."""
     from app.services.message_rewriter import generate_variations
 
@@ -201,11 +213,12 @@ def test_generate_variations_api_error_raises(mock_anthropic):
     mock_client.messages.create.side_effect = mock_anthropic.APIError("rate limit")
 
     with pytest.raises(Exception):
-        generate_variations("Olá {nome}!", 3)
+        generate_variations("Olá {nome}!", 3, _mock_db)
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_invalid_json_raises(mock_anthropic):
+def test_generate_variations_invalid_json_raises(mock_anthropic, _mock_key):
     """GIVEN LLM returns non-JSON response, WHEN parsed, THEN raises ValueError."""
     from app.services.message_rewriter import generate_variations
 
@@ -216,11 +229,12 @@ def test_generate_variations_invalid_json_raises(mock_anthropic):
     mock_client.messages.create.return_value = mock_response
 
     with pytest.raises(ValueError, match="formato inesperado"):
-        generate_variations("Olá {nome}!", 3)
+        generate_variations("Olá {nome}!", 3, _mock_db)
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_json_not_list_raises(mock_anthropic):
+def test_generate_variations_json_not_list_raises(mock_anthropic, _mock_key):
     """GIVEN LLM returns valid JSON but not a list, WHEN parsed, THEN raises ValueError."""
     from app.services.message_rewriter import generate_variations
 
@@ -231,11 +245,12 @@ def test_generate_variations_json_not_list_raises(mock_anthropic):
     mock_client.messages.create.return_value = mock_response
 
     with pytest.raises(ValueError, match="formato inesperado"):
-        generate_variations("Olá {nome}!", 3)
+        generate_variations("Olá {nome}!", 3, _mock_db)
 
 
+@_KEY_PATCH
 @patch("app.services.message_rewriter.anthropic")
-def test_generate_variations_template_without_placeholders(mock_anthropic):
+def test_generate_variations_template_without_placeholders(mock_anthropic, _mock_key):
     """GIVEN template with no placeholders, WHEN called, THEN variations also have no placeholders."""
     from app.services.message_rewriter import generate_variations
 
@@ -250,5 +265,5 @@ def test_generate_variations_template_without_placeholders(mock_anthropic):
     mock_response.content = [Mock(text=json.dumps(variations))]
     mock_client.messages.create.return_value = mock_response
 
-    result = generate_variations("Aula amanhã, não faltem!", 3)
+    result = generate_variations("Aula amanhã, não faltem!", 3, _mock_db)
     assert len(result) == 3

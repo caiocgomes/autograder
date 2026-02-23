@@ -268,6 +268,7 @@ def retry_campaign(
 @router.post("/variations", response_model=VariationResponse)
 def generate_message_variations(
     request: VariationRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.ADMIN)),
 ):
     """Generate message variations using LLM for anti-spam diversity."""
@@ -277,7 +278,7 @@ def generate_message_variations(
 
     try:
         variations = generate_variations(
-            request.message_template, request.num_variations
+            request.message_template, request.num_variations, db
         )
     except Exception as e:
         logger.error("generate_message_variations failed: %s", e)

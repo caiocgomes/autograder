@@ -20,6 +20,7 @@ import { GradesPage } from './pages/professor/GradesPage';
 import { MessagingPage } from './pages/professor/MessagingPage';
 import { CampaignDetailPage } from './pages/professor/CampaignDetailPage';
 import { OnboardingPage } from './pages/professor/OnboardingPage';
+import { SettingsPage } from './pages/professor/SettingsPage';
 import { MyClassesPage } from './pages/student/MyClassesPage';
 import { ExerciseListsViewPage } from './pages/student/ExerciseListsViewPage';
 import { ExerciseDetailPage } from './pages/student/ExerciseDetailPage';
@@ -66,6 +67,7 @@ function App() {
           <Route path="messaging" element={<MessagingPage />} />
           <Route path="messaging/campaigns/:id" element={<CampaignDetailPage />} />
           <Route path="onboarding" element={<OnboardingPage />} />
+          <Route path="settings" element={<SettingsPage />} />
         </Route>
 
         {/* Student Dashboard */}
