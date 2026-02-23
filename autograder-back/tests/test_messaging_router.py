@@ -491,6 +491,8 @@ def test_retry_campaign_success(client_with_admin):
     campaign.status = CampaignStatus.PARTIAL_FAILURE
     campaign.message_template = "Hello {nome}"
     campaign.failed_count = 2
+    campaign.throttle_min_seconds = 15.0
+    campaign.throttle_max_seconds = 25.0
 
     r1 = Mock(spec=MessageRecipient)
     r1.status = RecipientStatus.FAILED

@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, ForeignKey, Enum
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -31,6 +31,8 @@ class MessageCampaign(Base):
     total_recipients = Column(Integer, nullable=False)
     sent_count = Column(Integer, nullable=False, default=0)
     failed_count = Column(Integer, nullable=False, default=0)
+    throttle_min_seconds = Column(Float, nullable=True, server_default="15.0")
+    throttle_max_seconds = Column(Float, nullable=True, server_default="25.0")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 

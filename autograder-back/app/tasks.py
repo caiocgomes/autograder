@@ -1613,6 +1613,8 @@ def send_bulk_messages(
     message_template: str,
     only_pending: bool = False,
     variations: Optional[List[str]] = None,
+    throttle_min: Optional[float] = None,
+    throttle_max: Optional[float] = None,
 ) -> Dict[str, int]:
     """
     Send WhatsApp messages for a campaign with throttling and progressive DB updates.
@@ -1718,9 +1720,11 @@ def send_bulk_messages(
 
             db.commit()
 
-            # Throttle between sends
+            # Throttle between sends (configurable per campaign, defaults 15-25s)
             if i < len(pending_recipients) - 1:
-                delay = _random.uniform(10, 30)
+                _tmin = throttle_min if throttle_min is not None else 15.0
+                _tmax = throttle_max if throttle_max is not None else 25.0
+                delay = _random.uniform(_tmin, _tmax)
                 _log.info(
                     "Throttle: waiting %.1fs before next send (%d/%d)",
                     delay, i + 1, len(pending_recipients),

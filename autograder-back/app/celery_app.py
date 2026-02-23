@@ -25,6 +25,10 @@ celery_app.conf.update(
     task_soft_time_limit=540,  # Warning at 9 minutes
     worker_prefetch_multiplier=1,  # Process one task at a time per worker
     worker_max_tasks_per_child=100,  # Restart worker after 100 tasks to prevent memory leaks
+    task_routes={
+        "app.tasks.send_bulk_messages": {"queue": "whatsapp_bulk"},
+        "app.tasks.execute_side_effect": {"queue": "whatsapp_rt"},
+    },
 )
 
 celery_app.conf.beat_schedule = {

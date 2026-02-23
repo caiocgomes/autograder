@@ -63,13 +63,13 @@ services:
           action: sync
           target: /app
 
-  # Celery Worker for async tasks
+  # Celery Worker for async tasks (default + whatsapp_rt queues)
   worker:
     build:
       context: ./autograder-back
       dockerfile: Dockerfile.dev
     container_name: autograder-worker
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=4
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4 -Q celery,whatsapp_rt
     volumes:
       - ./autograder-back:/app
       - /var/run/docker.sock:/var/run/docker.sock  # For Docker sandbox creation
@@ -80,6 +80,31 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       UPLOAD_BASE_DIR: /app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    develop:
+      watch:
+        - path: ./autograder-back
+          action: sync+restart
+          target: /app
+
+  # Celery Worker for bulk WhatsApp campaigns (single concurrency to respect throttle)
+  worker-bulk:
+    build:
+      context: ./autograder-back
+      dockerfile: Dockerfile.dev
+    container_name: autograder-worker-bulk
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1 -Q whatsapp_bulk
+    volumes:
+      - ./autograder-back:/app
+    environment:
+      DATABASE_URL: postgresql://autograder:autograder@db:5432/autograder
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
       db:
         condition: service_healthy

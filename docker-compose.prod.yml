@@ -66,6 +66,7 @@ services:
       dockerfile: Dockerfile.worker
     container_name: autograder-worker
     restart: always
+    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=4", "-Q", "celery,whatsapp_rt"]
     env_file:
       - ./autograder-back/.env
     environment:
@@ -73,6 +74,24 @@ services:
       DEBUG: "false"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-bulk:
+    build:
+      context: ./autograder-back
+      dockerfile: Dockerfile.worker
+    container_name: autograder-worker-bulk
+    restart: always
+    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=1", "-Q", "whatsapp_bulk"]
+    env_file:
+      - ./autograder-back/.env
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
     depends_on:
       db:
         condition: service_healthy

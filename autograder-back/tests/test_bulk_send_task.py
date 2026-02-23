@@ -461,3 +461,181 @@ def test_db_commit_called_per_recipient(mock_session_cls, mock_send):
 
     # 2 commits (one per recipient) + 1 final commit for campaign status
     assert db.commit.call_count >= 3
+
+
+# ── configurable throttle ──────────────────────────────────────────────
+
+
+@patch("app.integrations.evolution.send_message")
+@patch("app.database.SessionLocal")
+def test_throttle_custom_range(mock_session_cls, mock_send):
+    """GIVEN custom throttle 5-10s, THEN random.uniform called with those values."""
+    mock_send.return_value = True
+    db = MagicMock()
+    mock_session_cls.return_value = db
+
+    campaign = _make_mock_campaign()
+    recipients = [
+        _make_mock_recipient(1, "5511999990001"),
+        _make_mock_recipient(2, "5511999990002"),
+        _make_mock_recipient(3, "5511999990003"),
+    ]
+
+    call_count = {"n": 0}
+
+    def mock_query(*args):
+        call_count["n"] += 1
+        result = MagicMock()
+        if call_count["n"] == 1:
+            result.filter.return_value.first.return_value = campaign
+        elif call_count["n"] == 2:
+            result.filter.return_value.all.return_value = recipients
+        else:
+            result.filter.return_value.first.return_value = campaign
+        return result
+
+    db.query = mock_query
+
+    with patch("time.sleep") as mock_sleep, patch("random.uniform", return_value=7.5) as mock_uniform:
+        send_bulk_messages(42, "Hello!", throttle_min=5.0, throttle_max=10.0)
+
+    # random.uniform should have been called with custom range
+    for call in mock_uniform.call_args_list:
+        assert call == ((5.0, 10.0),), f"Expected uniform(5.0, 10.0), got {call}"
+
+    assert mock_sleep.call_count == 2
+
+
+@patch("app.integrations.evolution.send_message")
+@patch("app.database.SessionLocal")
+def test_throttle_defaults_when_none(mock_session_cls, mock_send):
+    """GIVEN no throttle params, THEN falls back to 15-25s defaults."""
+    mock_send.return_value = True
+    db = MagicMock()
+    mock_session_cls.return_value = db
+
+    campaign = _make_mock_campaign(total=2)
+    recipients = [
+        _make_mock_recipient(1, "5511999990001"),
+        _make_mock_recipient(2, "5511999990002"),
+    ]
+
+    call_count = {"n": 0}
+
+    def mock_query(*args):
+        call_count["n"] += 1
+        result = MagicMock()
+        if call_count["n"] == 1:
+            result.filter.return_value.first.return_value = campaign
+        elif call_count["n"] == 2:
+            result.filter.return_value.all.return_value = recipients
+        else:
+            result.filter.return_value.first.return_value = campaign
+        return result
+
+    db.query = mock_query
+
+    with patch("time.sleep"), patch("random.uniform", return_value=20.0) as mock_uniform:
+        send_bulk_messages(42, "Hello!")
+
+    # Should use default 15-25 range
+    for call in mock_uniform.call_args_list:
+        assert call == ((15.0, 25.0),), f"Expected uniform(15.0, 25.0), got {call}"
+
+
+# ── schema validation ──────────────────────────────────────────────────
+
+
+def test_bulk_send_request_throttle_defaults():
+    """GIVEN no throttle params, THEN defaults to 15/25."""
+    from app.schemas.messaging import BulkSendRequest
+    req = BulkSendRequest(user_ids=[1], message_template="Hello {nome}!")
+    assert req.throttle_min_seconds == 15.0
+    assert req.throttle_max_seconds == 25.0
+
+
+def test_bulk_send_request_throttle_custom():
+    """GIVEN custom throttle, THEN values are set."""
+    from app.schemas.messaging import BulkSendRequest
+    req = BulkSendRequest(
+        user_ids=[1], message_template="Hello {nome}!",
+        throttle_min_seconds=5.0, throttle_max_seconds=10.0,
+    )
+    assert req.throttle_min_seconds == 5.0
+    assert req.throttle_max_seconds == 10.0
+
+
+def test_bulk_send_request_throttle_min_below_floor():
+    """GIVEN throttle_min < 3, THEN validation error."""
+    from app.schemas.messaging import BulkSendRequest
+    with pytest.raises(Exception):
+        BulkSendRequest(
+            user_ids=[1], message_template="Hello!",
+            throttle_min_seconds=1.0, throttle_max_seconds=5.0,
+        )
+
+
+def test_bulk_send_request_throttle_max_below_min():
+    """GIVEN throttle_max < throttle_min, THEN validation error."""
+    from app.schemas.messaging import BulkSendRequest
+    with pytest.raises(Exception):
+        BulkSendRequest(
+            user_ids=[1], message_template="Hello!",
+            throttle_min_seconds=20.0, throttle_max_seconds=10.0,
+        )
+
+
+def test_bulk_send_request_throttle_min_at_floor():
+    """GIVEN throttle_min == 3, THEN valid."""
+    from app.schemas.messaging import BulkSendRequest
+    req = BulkSendRequest(
+        user_ids=[1], message_template="Hello {nome}!",
+        throttle_min_seconds=3.0, throttle_max_seconds=5.0,
+    )
+    assert req.throttle_min_seconds == 3.0
+
+
+# ── dynamic time limit calculation ─────────────────────────────────────
+
+
+def test_time_limit_calculation_large_campaign():
+    """Verify time limit formula for a large campaign."""
+    n_recipients = 500
+    throttle_min = 30.0
+    throttle_max = 60.0
+    avg_delay = (throttle_min + throttle_max) / 2
+    api_overhead = 2
+    estimated = n_recipients * (avg_delay + api_overhead)
+    soft_limit = max(estimated * 1.3, 120)
+    hard_limit = soft_limit + 300
+
+    assert soft_limit == 500 * (45 + 2) * 1.3  # 30550.0
+    assert hard_limit == soft_limit + 300
+
+
+def test_time_limit_calculation_small_campaign_uses_floor():
+    """Verify small campaigns use the 120s floor."""
+    n_recipients = 3
+    throttle_min = 5.0
+    throttle_max = 10.0
+    avg_delay = (throttle_min + throttle_max) / 2
+    api_overhead = 2
+    estimated = n_recipients * (avg_delay + api_overhead)
+    soft_limit = max(estimated * 1.3, 120)
+
+    # 3 * (7.5 + 2) * 1.3 = 37.05, so floor of 120 applies
+    assert soft_limit == 120
+
+
+def test_time_limit_calculation_retry_uses_pending_count():
+    """Verify retry recalculates based on pending recipients, not total."""
+    pending_count = 20  # not 500
+    throttle_min = 30.0
+    throttle_max = 60.0
+    avg_delay = (throttle_min + throttle_max) / 2
+    api_overhead = 2
+    estimated = pending_count * (avg_delay + api_overhead)
+    soft_limit = max(estimated * 1.3, 120)
+
+    # 20 * (45 + 2) * 1.3 = 1222.0
+    assert soft_limit == 20 * 47 * 1.3

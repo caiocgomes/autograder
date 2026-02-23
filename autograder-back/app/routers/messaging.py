@@ -240,11 +240,26 @@ def retry_campaign(
 
     db.commit()
 
-    # Dispatch task for pending recipients only
+    # Dispatch task for pending recipients only, reusing campaign throttle config
+    throttle_min = campaign.throttle_min_seconds or 15.0
+    throttle_max = campaign.throttle_max_seconds or 25.0
+
+    avg_delay = (throttle_min + throttle_max) / 2
+    api_overhead = 2
+    estimated = len(failed_recipients) * (avg_delay + api_overhead)
+    soft_limit = max(estimated * 1.3, 120)
+    hard_limit = soft_limit + 300
+
     celery_app.send_task(
         "app.tasks.send_bulk_messages",
         args=[campaign.id, campaign.message_template],
-        kwargs={"only_pending": True},
+        kwargs={
+            "only_pending": True,
+            "throttle_min": throttle_min,
+            "throttle_max": throttle_max,
+        },
+        soft_time_limit=int(soft_limit),
+        time_limit=int(hard_limit),
     )
 
     return RetryResponse(retrying=len(failed_recipients), campaign_id=campaign.id)
@@ -344,6 +359,8 @@ def send_bulk_message(
         sent_by=current_user.id,
         status=CampaignStatus.SENDING,
         total_recipients=len(sendable),
+        throttle_min_seconds=request.throttle_min_seconds,
+        throttle_max_seconds=request.throttle_max_seconds,
     )
     db.add(campaign)
     db.flush()  # get campaign.id
@@ -362,15 +379,26 @@ def send_bulk_message(
     db.commit()
     db.refresh(campaign)
 
-    # Dispatch Celery task
-    task_kwargs = {}
+    # Dispatch Celery task with dynamic time limits
+    task_kwargs = {
+        "throttle_min": request.throttle_min_seconds,
+        "throttle_max": request.throttle_max_seconds,
+    }
     if request.variations:
         task_kwargs["variations"] = request.variations
+
+    avg_delay = (request.throttle_min_seconds + request.throttle_max_seconds) / 2
+    api_overhead = 2  # seconds per message (Evolution API latency + DB commit)
+    estimated = len(sendable) * (avg_delay + api_overhead)
+    soft_limit = max(estimated * 1.3, 120)
+    hard_limit = soft_limit + 300
 
     task = celery_app.send_task(
         "app.tasks.send_bulk_messages",
         args=[campaign.id, request.message_template],
         kwargs=task_kwargs,
+        soft_time_limit=int(soft_limit),
+        time_limit=int(hard_limit),
     )
 
     return BulkSendResponse(

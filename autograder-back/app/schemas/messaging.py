@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List
 from datetime import datetime
 import re
@@ -45,8 +45,16 @@ class BulkSendRequest(BaseModel):
     user_ids: List[int] = Field(..., min_length=1)
     message_template: str = Field(..., min_length=1)
     course_id: Optional[int] = None
+    throttle_min_seconds: Optional[float] = Field(default=15.0, ge=3.0)
+    throttle_max_seconds: Optional[float] = Field(default=25.0)
 
     variations: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def validate_throttle_range(self) -> "BulkSendRequest":
+        if self.throttle_max_seconds < self.throttle_min_seconds:
+            raise ValueError("throttle_max_seconds deve ser >= throttle_min_seconds")
+        return self
 
     @field_validator("message_template")
     @classmethod
