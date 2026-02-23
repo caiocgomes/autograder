@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.models.user import User, LifecycleStatus
 from app.models.product import Product, ProductAccessRule, AccessRuleType
 from app.models.event import Event, EventStatus
+from app.models.message_template import MessageTemplate, TemplateEventType
 from app import integrations
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,25 @@ def _alert_admin_failure(side_effect_name: str, user: User, error: str) -> None:
     # This intentionally does NOT raise - alerting failures must not cascade
 
 
+def _get_template(db: Session, event_type: TemplateEventType, fallback: str) -> str:
+    """Read template from DB, fallback to hardcoded constant on miss or error."""
+    try:
+        row = db.query(MessageTemplate).filter(MessageTemplate.event_type == event_type).first()
+        if row:
+            return row.template_text
+    except Exception:
+        logger.warning("Failed to read template %s from DB, using fallback", event_type.value)
+    return fallback
+
+
+def _resolve_lifecycle_template(template: str, variables: Dict[str, Any]) -> str:
+    """Resolve {variable} placeholders in a lifecycle template."""
+    result = template
+    for key, value in variables.items():
+        result = result.replace("{" + key + "}", str(value))
+    return result
+
+
 def generate_onboarding_token(db: Session, user: User) -> str:
     """Generate and store a unique 8-char onboarding token (valid 7 days)."""
     token = secrets.token_urlsafe(6)[:8].upper()
@@ -167,7 +187,16 @@ def _side_effects_for_pending_onboarding(
 
     if user.whatsapp_number:
         product_name = product.name if product else ""
-        text = MSG_ONBOARDING.format(product_name=product_name, onboarding_token=token)
+        template = _get_template(db, TemplateEventType.ONBOARDING, MSG_ONBOARDING)
+        nome = user.email.split("@")[0]
+        variables = {
+            "product_name": product_name,
+            "onboarding_token": token,
+            "token": token,
+            "nome": nome,
+            "primeiro_nome": nome.split()[0] if nome else "",
+        }
+        text = _resolve_lifecycle_template(template, variables)
         _execute_side_effect(
             "evolution.message_sent",
             lambda: evolution.send_message(user.whatsapp_number, text),
@@ -200,12 +229,19 @@ def _side_effects_for_active(
 
     if user.whatsapp_number:
         product_name = product.name if product else ""
+        nome = user.email.split("@")[0]
+        variables = {
+            "product_name": product_name,
+            "nome": nome,
+            "primeiro_nome": nome.split()[0] if nome else "",
+        }
         if is_reactivation:
-            text = MSG_WELCOME_BACK.format(product_name=product_name)
+            template = _get_template(db, TemplateEventType.WELCOME_BACK, MSG_WELCOME_BACK)
             event_name = "welcome-back"
         else:
-            text = MSG_WELCOME.format(product_name=product_name)
+            template = _get_template(db, TemplateEventType.WELCOME, MSG_WELCOME)
             event_name = "welcome-confirmed"
+        text = _resolve_lifecycle_template(template, variables)
         _execute_side_effect(
             "evolution.message_sent",
             lambda: evolution.send_message(user.whatsapp_number, text),
@@ -237,7 +273,14 @@ def _side_effects_for_churned(
 
     if user.whatsapp_number:
         product_name = product.name if product else ""
-        text = MSG_CHURN.format(product_name=product_name)
+        nome = user.email.split("@")[0]
+        template = _get_template(db, TemplateEventType.CHURN, MSG_CHURN)
+        variables = {
+            "product_name": product_name,
+            "nome": nome,
+            "primeiro_nome": nome.split()[0] if nome else "",
+        }
+        text = _resolve_lifecycle_template(template, variables)
         _execute_side_effect(
             "evolution.message_sent",
             lambda: evolution.send_message(user.whatsapp_number, text),

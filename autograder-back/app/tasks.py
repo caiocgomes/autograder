@@ -1627,9 +1627,11 @@ def send_bulk_messages(
     import time as _time
     import random as _random
     import logging as _logging
-    from datetime import datetime, timezone
+    import secrets as _secrets
+    from datetime import datetime, timedelta, timezone
     from app.integrations import evolution as _evo
     from app.database import SessionLocal
+    from app.models.user import User
     from app.models.message_campaign import (
         MessageCampaign,
         MessageRecipient,
@@ -1662,6 +1664,8 @@ def send_bulk_messages(
         sent = 0
         failed = 0
 
+        has_token_var = "{token}" in message_template
+
         for i, recipient in enumerate(pending_recipients):
             name = recipient.name or ""
             variables = {
@@ -1670,6 +1674,21 @@ def send_bulk_messages(
                 "email": "",
                 "turma": campaign.course_name or "",
             }
+
+            # Token auto-management: generate/regenerate if template uses {token}
+            if has_token_var:
+                user = db.query(User).filter(User.id == recipient.user_id).first()
+                if user:
+                    now_check = datetime.now(timezone.utc)
+                    needs_new_token = (
+                        user.onboarding_token is None
+                        or (user.onboarding_token_expires_at and user.onboarding_token_expires_at < now_check)
+                    )
+                    if needs_new_token:
+                        user.onboarding_token = _secrets.token_urlsafe(6)[:8].upper()
+                        user.onboarding_token_expires_at = now_check + timedelta(days=7)
+                    variables["token"] = user.onboarding_token
+
             message = resolve_template(message_template, variables)
 
             recipient.resolved_message = message
