@@ -1607,7 +1607,7 @@ def resolve_template(template: str, variables: Dict[str, str]) -> str:
     return result
 
 
-@celery_app.task(name="app.tasks.send_bulk_messages")
+@celery_app.task(name="app.tasks.send_bulk_messages", soft_time_limit=7200, time_limit=7500)
 def send_bulk_messages(
     campaign_id: int,
     message_template: str,

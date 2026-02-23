@@ -26,6 +26,14 @@ export function MessagingPage() {
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Variations
+  const [useVariations, setUseVariations] = useState(false);
+  const [variations, setVariations] = useState<string[]>([]);
+  const [selectedVariations, setSelectedVariations] = useState<Set<number>>(new Set());
+  const [editingVariation, setEditingVariation] = useState<number | null>(null);
+  const [isGeneratingVariations, setIsGeneratingVariations] = useState(false);
+  const [variationWarning, setVariationWarning] = useState<string | null>(null);
+
   // Campaigns
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [isLoadingCampaigns, setIsLoadingCampaigns] = useState(false);
@@ -101,6 +109,42 @@ export function MessagingPage() {
     }, 0);
   };
 
+  const handleGenerateVariations = async () => {
+    if (!messageTemplate.trim()) return;
+    setIsGeneratingVariations(true);
+    setVariationWarning(null);
+    setError(null);
+    try {
+      const result = await messagingApi.generateVariations({
+        message_template: messageTemplate,
+        num_variations: 6,
+      });
+      setVariations(result.variations);
+      setSelectedVariations(new Set(result.variations.map((_, i) => i)));
+      setVariationWarning(result.warning);
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'Erro ao gerar variações');
+    } finally {
+      setIsGeneratingVariations(false);
+    }
+  };
+
+  const handleToggleVariation = (index: number) => {
+    setSelectedVariations((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  const handleEditVariation = (index: number, newText: string) => {
+    setVariations((prev) => prev.map((v, i) => (i === index ? newText : v)));
+  };
+
+  const approvedVariations = variations.filter((_, i) => selectedVariations.has(i));
+
   const selectedRecipients = recipients.filter((r) => selectedIds.has(r.id));
   const selectedWithWhatsapp = selectedRecipients.filter((r) => r.has_whatsapp);
   const selectedWithoutWhatsapp = selectedRecipients.filter((r) => !r.has_whatsapp);
@@ -129,11 +173,15 @@ export function MessagingPage() {
     setFeedback(null);
     setError(null);
     try {
-      const result = await messagingApi.sendBulk({
+      const request: any = {
         user_ids: Array.from(selectedIds),
         message_template: messageTemplate,
         course_id: selectedCourseId,
-      });
+      };
+      if (useVariations && approvedVariations.length > 0) {
+        request.variations = approvedVariations;
+      }
+      const result = await messagingApi.sendBulk(request);
       navigate(`/professor/messaging/campaigns/${result.campaign_id}`);
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
@@ -277,6 +325,108 @@ export function MessagingPage() {
             boxSizing: 'border-box',
           }}
         />
+      </div>
+
+      {/* Variações */}
+      <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: useVariations ? '15px' : '0' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={useVariations}
+              onChange={(e) => {
+                setUseVariations(e.target.checked);
+                if (!e.target.checked) {
+                  setVariations([]);
+                  setSelectedVariations(new Set());
+                  setVariationWarning(null);
+                }
+              }}
+            />
+            <span style={{ fontSize: '14px', fontWeight: 500 }}>Gerar variações (anti-spam)</span>
+          </label>
+          {useVariations && (
+            <button
+              onClick={handleGenerateVariations}
+              disabled={!messageTemplate.trim() || isGeneratingVariations}
+              style={{
+                padding: '6px 14px',
+                fontSize: '13px',
+                border: '1px solid #8e44ad',
+                borderRadius: '4px',
+                backgroundColor: !messageTemplate.trim() || isGeneratingVariations ? '#e8e8e8' : 'white',
+                color: !messageTemplate.trim() || isGeneratingVariations ? '#999' : '#8e44ad',
+                cursor: !messageTemplate.trim() || isGeneratingVariations ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {isGeneratingVariations ? 'Gerando...' : variations.length > 0 ? 'Regenerar' : 'Gerar variações'}
+            </button>
+          )}
+        </div>
+
+        {useVariations && variationWarning && (
+          <div style={{ color: '#d97706', fontSize: '13px', marginBottom: '10px', padding: '8px', backgroundColor: '#fef3c7', borderRadius: '4px' }}>
+            {variationWarning}
+          </div>
+        )}
+
+        {useVariations && variations.length > 0 && (
+          <div style={{ border: '1px solid #ecf0f1', borderRadius: '4px' }}>
+            {variations.map((v, i) => (
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '10px',
+                  padding: '10px 12px',
+                  borderBottom: i < variations.length - 1 ? '1px solid #ecf0f1' : 'none',
+                  backgroundColor: selectedVariations.has(i) ? '#f0fdf4' : '#fafafa',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedVariations.has(i)}
+                  onChange={() => handleToggleVariation(i)}
+                  style={{ marginTop: '3px' }}
+                />
+                <div style={{ flex: 1 }}>
+                  {editingVariation === i ? (
+                    <textarea
+                      value={v}
+                      onChange={(e) => handleEditVariation(i, e.target.value)}
+                      onBlur={() => setEditingVariation(null)}
+                      onKeyDown={(e) => { if (e.key === 'Escape') setEditingVariation(null); }}
+                      autoFocus
+                      rows={3}
+                      style={{
+                        width: '100%',
+                        padding: '6px 8px',
+                        border: '1px solid #3498db',
+                        borderRadius: '4px',
+                        fontSize: '13px',
+                        resize: 'vertical',
+                        fontFamily: 'inherit',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  ) : (
+                    <div
+                      onClick={() => setEditingVariation(i)}
+                      style={{ fontSize: '13px', cursor: 'text', whiteSpace: 'pre-wrap', minHeight: '20px' }}
+                    >
+                      {v}
+                    </div>
+                  )}
+                </div>
+                <span style={{ fontSize: '11px', color: '#999', whiteSpace: 'nowrap' }}>#{i + 1}</span>
+              </div>
+            ))}
+            <div style={{ padding: '8px 12px', fontSize: '12px', color: '#7f8c8d', backgroundColor: '#f8f9fa' }}>
+              {approvedVariations.length} de {variations.length} variação(ões) selecionada(s). Clique no texto para editar.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Preview */}

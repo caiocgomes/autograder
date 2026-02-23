@@ -23,6 +23,18 @@ export interface BulkSendRequest {
   user_ids: number[];
   message_template: string;
   course_id?: number;
+  variations?: string[];
+}
+
+export interface VariationRequest {
+  message_template: string;
+  num_variations?: number;
+}
+
+export interface VariationResponse {
+  variations: string[];
+  original: string;
+  warning: string | null;
 }
 
 export interface BulkSendResponse {
@@ -92,6 +104,11 @@ export const messagingApi = {
 
   retryCampaign: async (id: number) => {
     const { data } = await apiClient.post<RetryResponse>(`/messaging/campaigns/${id}/retry`);
+    return data;
+  },
+
+  generateVariations: async (request: VariationRequest) => {
+    const { data } = await apiClient.post<VariationResponse>('/messaging/variations', request);
     return data;
   },
 };

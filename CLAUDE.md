@@ -9,6 +9,14 @@ Autograder is a monorepo for automated code grading with sandboxed execution and
 - **autograder-back/**: Python FastAPI backend (API, Celery workers, Docker sandbox, LLM integration)
 - **autograder-web/**: React + TypeScript + Vite frontend
 
+
+
+# Observation Regarding Evolution API
+
+Evolution API is a WhatsApp API that allows you to send and receive WhatsApp messages. It is a self-hosted solution that can be deployed on your own server. It is a good alternative to the official WhatsApp Business API, which can be expensive and difficult to use. 
+
+When you need to send messages, we can't block the line for suspect behavior. So you ALWAYS WILL guarantee that between messages we will wait between 15 and 25 seconds. It's the only way to avoid blocking the line.
+
 ## Commands
 
 ### Backend (run from `autograder-back/` — all `uv run` commands require this cwd)
