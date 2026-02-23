@@ -24,6 +24,8 @@ export interface BulkSendRequest {
   message_template: string;
   course_id?: number;
   variations?: string[];
+  throttle_min_seconds?: number;
+  throttle_max_seconds?: number;
 }
 
 export interface VariationRequest {
@@ -82,7 +84,7 @@ export const messagingApi = {
     return data;
   },
 
-  getRecipients: async (params: { course_id: number; has_whatsapp?: boolean }) => {
+  getRecipients: async (params: { course_id: number; has_whatsapp?: boolean; lifecycle_status?: string }) => {
     const { data } = await apiClient.get<Recipient[]>('/messaging/recipients', { params });
     return data;
   },

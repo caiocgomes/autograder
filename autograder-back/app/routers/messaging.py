@@ -5,7 +5,7 @@ from typing import Optional, List
 
 from app.database import get_db
 from app.auth.dependencies import require_role
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, LifecycleStatus
 from app.models.product import Product
 from app.models.hotmart_buyer import HotmartBuyer
 from app.models.hotmart_product_mapping import HotmartProductMapping
@@ -57,6 +57,7 @@ def list_courses(
 def list_recipients(
     course_id: int = Query(...),
     has_whatsapp: Optional[bool] = Query(None),
+    lifecycle_status: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.ADMIN)),
 ):
@@ -80,6 +81,16 @@ def list_recipients(
         .join(HotmartBuyer, HotmartBuyer.user_id == User.id)
         .filter(HotmartBuyer.hotmart_product_id.in_(hotmart_product_ids))
     )
+
+    if lifecycle_status is not None:
+        try:
+            ls = LifecycleStatus(lifecycle_status)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"lifecycle_status inválido: {lifecycle_status}. Valores válidos: {[s.value for s in LifecycleStatus]}",
+            )
+        query = query.filter(User.lifecycle_status == ls)
 
     if has_whatsapp is True:
         query = query.filter(User.whatsapp_number.isnot(None), User.whatsapp_number != "")
