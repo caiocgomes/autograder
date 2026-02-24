@@ -29,7 +29,7 @@ WORKDIR /app
 COPY . .
 
 # Create upload directories
-RUN mkdir -p /app/uploads /app/datasets && chown appuser:appuser /app/uploads /app/datasets
+RUN mkdir -p /app/uploads /app/datasets /app/dev_messages && chown appuser:appuser /app/uploads /app/datasets /app/dev_messages
 
 USER appuser
 
