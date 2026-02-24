@@ -142,7 +142,7 @@ def _resolve_lifecycle_template(template: str, variables: Dict[str, Any]) -> str
 
 def generate_onboarding_token(db: Session, user: User) -> str:
     """Generate and store a unique 8-char onboarding token (valid 7 days)."""
-    token = secrets.token_urlsafe(6)[:8].upper()
+    token = secrets.token_hex(4).upper()
     user.onboarding_token = token
     user.onboarding_token_expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     return token

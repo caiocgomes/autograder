@@ -1778,7 +1778,7 @@ def send_bulk_messages(
                         or (user.onboarding_token_expires_at and user.onboarding_token_expires_at < now_check)
                     )
                     if needs_new_token:
-                        user.onboarding_token = _secrets.token_urlsafe(6)[:8].upper()
+                        user.onboarding_token = _secrets.token_hex(4).upper()
                         user.onboarding_token_expires_at = now_check + timedelta(days=7)
                     variables["token"] = user.onboarding_token
 
