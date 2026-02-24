@@ -25,6 +25,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 WORKDIR /app
 COPY . .
 
+RUN mkdir -p /app/uploads /app/datasets && chown appuser:appuser /app/uploads /app/datasets
+
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
