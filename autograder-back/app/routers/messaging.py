@@ -101,7 +101,7 @@ def list_recipients(
 
         recipients.append(
             RecipientOut(
-                id=user.id if user else 0,
+                id=buyer.id,
                 name=display_name,
                 email=buyer.email,
                 whatsapp_number=phone,
@@ -311,10 +311,14 @@ def send_bulk_message(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.ADMIN)),
 ):
-    """Dispatch bulk WhatsApp message to selected students via Celery."""
-    users = db.query(User).filter(User.id.in_(request.user_ids)).all()
-    if not users:
-        raise HTTPException(status_code=404, detail="Nenhum usuário encontrado")
+    """Dispatch bulk WhatsApp message to selected students via Celery.
+
+    user_ids are HotmartBuyer IDs (from the recipients endpoint).
+    Phone is resolved from buyer record first, then linked User if available.
+    """
+    buyers = db.query(HotmartBuyer).filter(HotmartBuyer.id.in_(request.user_ids)).all()
+    if not buyers:
+        raise HTTPException(status_code=404, detail="Nenhum destinatário encontrado")
 
     # Resolve course name for {turma} variable
     course_name = ""
@@ -323,31 +327,29 @@ def send_bulk_message(
         if course:
             course_name = course.name
 
-    # Get buyer names for these users (best-effort)
-    buyer_names = {}
-    if request.user_ids:
-        buyers = (
-            db.query(HotmartBuyer.user_id, HotmartBuyer.name)
-            .filter(HotmartBuyer.user_id.in_(request.user_ids), HotmartBuyer.name.isnot(None))
-            .all()
-        )
-        for user_id, name in buyers:
-            if name and user_id not in buyer_names:
-                buyer_names[user_id] = name
+    # Pre-load linked users for buyers that have user_id
+    linked_user_ids = [b.user_id for b in buyers if b.user_id]
+    users_by_id = {}
+    if linked_user_ids:
+        users = db.query(User).filter(User.id.in_(linked_user_ids)).all()
+        users_by_id = {u.id: u for u in users}
 
     # Split into sendable vs skipped
     sendable = []
     skipped = []
-    for user in users:
-        if not user.whatsapp_number:
-            skipped.append(SkippedUser(id=user.id, name=user.email, reason="no_whatsapp"))
+    for buyer in buyers:
+        user = users_by_id.get(buyer.user_id) if buyer.user_id else None
+        phone = buyer.phone or (user.whatsapp_number if user else None)
+        display_name = buyer.name or buyer.email
+
+        if not phone:
+            skipped.append(SkippedUser(id=buyer.id, name=display_name, reason="no_whatsapp"))
         else:
-            display_name = buyer_names.get(user.id, user.email)
             sendable.append({
-                "user_id": user.id,
-                "phone": user.whatsapp_number,
+                "user_id": user.id if user else None,
+                "phone": phone,
                 "name": display_name,
-                "email": user.email,
+                "email": buyer.email,
             })
 
     if not sendable:

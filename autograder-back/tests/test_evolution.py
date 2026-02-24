@@ -15,6 +15,7 @@ class TestSendMessage:
 
         with patch("app.integrations.evolution.settings") as mock_settings:
             mock_settings.evolution_enabled = True
+            mock_settings.evolution_dev_mode = False
             mock_settings.evolution_api_url = "https://evo.example.com"
             mock_settings.evolution_api_key = "test-key"
             mock_settings.evolution_instance = "test-instance"
@@ -26,7 +27,7 @@ class TestSendMessage:
         call_kwargs = mock_client_instance.post.call_args
         assert "test-instance" in call_kwargs[0][0]
         payload = call_kwargs[1]["json"]
-        assert payload["number"] == "+5511999999999"
+        assert payload["number"] == "5511999999999"
         assert payload["text"] == "Hello!"
 
     def test_status_201_returns_true(self):
@@ -40,6 +41,7 @@ class TestSendMessage:
 
         with patch("app.integrations.evolution.settings") as mock_settings:
             mock_settings.evolution_enabled = True
+            mock_settings.evolution_dev_mode = False
             mock_settings.evolution_api_url = "https://evo.example.com"
             mock_settings.evolution_api_key = "test-key"
             mock_settings.evolution_instance = "test-instance"
@@ -61,6 +63,7 @@ class TestSendMessage:
 
         with patch("app.integrations.evolution.settings") as mock_settings:
             mock_settings.evolution_enabled = True
+            mock_settings.evolution_dev_mode = False
             mock_settings.evolution_api_url = "https://evo.example.com"
             mock_settings.evolution_api_key = "test-key"
             mock_settings.evolution_instance = "test-instance"
@@ -77,6 +80,7 @@ class TestSendMessage:
 
         with patch("app.integrations.evolution.settings") as mock_settings:
             mock_settings.evolution_enabled = True
+            mock_settings.evolution_dev_mode = False
             mock_settings.evolution_api_url = "https://evo.example.com"
             mock_settings.evolution_api_key = "test-key"
             mock_settings.evolution_instance = "test-instance"

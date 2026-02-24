@@ -197,9 +197,10 @@ def _side_effects_for_pending_onboarding(
             "primeiro_nome": nome.split()[0] if nome else "",
         }
         text = _resolve_lifecycle_template(template, variables)
+        sid = f"onboarding_{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
         _execute_side_effect(
             "evolution.message_sent",
-            lambda: evolution.send_message(user.whatsapp_number, text),
+            lambda: evolution.send_message(user.whatsapp_number, text, send_id=sid),
             db, user, {"event": "onboarding", "token": token},
         )
 
@@ -242,9 +243,10 @@ def _side_effects_for_active(
             template = _get_template(db, TemplateEventType.WELCOME, MSG_WELCOME)
             event_name = "welcome-confirmed"
         text = _resolve_lifecycle_template(template, variables)
+        sid = f"{event_name}_{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
         _execute_side_effect(
             "evolution.message_sent",
-            lambda: evolution.send_message(user.whatsapp_number, text),
+            lambda: evolution.send_message(user.whatsapp_number, text, send_id=sid),
             db, user, {"event": event_name},
         )
 
@@ -281,9 +283,10 @@ def _side_effects_for_churned(
             "primeiro_nome": nome.split()[0] if nome else "",
         }
         text = _resolve_lifecycle_template(template, variables)
+        sid = f"churn_{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
         _execute_side_effect(
             "evolution.message_sent",
-            lambda: evolution.send_message(user.whatsapp_number, text),
+            lambda: evolution.send_message(user.whatsapp_number, text, send_id=sid),
             db, user, {"event": "churn-notification"},
         )
 

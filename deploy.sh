@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# Autograder — First Deploy Script
-# Roda UMA vez no servidor depois de clonar o repo e preencher o .env
+# Autograder — Deploy Script
+# Sobe tudo: DB, Redis, Backend, Workers, Discord Bot, Frontend (via Nginx)
 # Uso: ./deploy.sh [APP_PORT]  (default: 8000)
 # =============================================================================
 
@@ -10,12 +10,15 @@ set -e
 APP_PORT=${1:-${APP_PORT:-8000}}
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="$REPO_DIR/autograder-back/.env"
+COMPOSE="docker compose -f docker-compose.prod.yml"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-info()  { echo -e "${GREEN}[✓]${NC} $1"; }
+info()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
-error() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
-step()  { echo -e "\n${YELLOW}══ $1 ══${NC}"; }
+error() { echo -e "${RED}[x]${NC} $1"; exit 1; }
+step()  { echo -e "\n${YELLOW}== $1 ==${NC}"; }
+
+SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || echo 'SEU_IP')
 
 echo ""
 echo "  Autograder Deploy"
@@ -23,100 +26,165 @@ echo "  Porta: $APP_PORT"
 echo ""
 
 # -----------------------------------------------------------------------------
-step "1/7 Verificando pré-requisitos"
+step "1/9 Verificando pre-requisitos"
 # -----------------------------------------------------------------------------
-command -v docker >/dev/null 2>&1 || error "Docker não encontrado"
-docker compose version >/dev/null 2>&1 || error "Docker Compose não encontrado"
-info "Docker ok"
+command -v docker >/dev/null 2>&1 || error "Docker nao encontrado"
+docker compose version >/dev/null 2>&1 || error "Docker Compose nao encontrado"
+command -v node >/dev/null 2>&1 || error "Node.js nao encontrado (necessario para build do frontend)"
+info "Docker + Node ok"
 
-[ -f "$ENV_FILE" ] || error ".env não encontrado em $ENV_FILE — copie .env.example e preencha"
+[ -f "$ENV_FILE" ] || error ".env nao encontrado em $ENV_FILE -- copie .env.example e preencha"
 
-# Verificar se ainda tem placeholders críticos
+# Verificar se ainda tem placeholders criticos
 for placeholder in "your-secret-key-here" "your-hotmart-webhook-secret" "your-discord-bot-token" "your-evolution-api-host"; do
     if grep -q "$placeholder" "$ENV_FILE" 2>/dev/null; then
-        error ".env ainda tem placeholder: '$placeholder' — preencha antes de continuar"
+        error ".env ainda tem placeholder: '$placeholder' -- preencha antes de continuar"
     fi
 done
 info ".env ok"
 
 # Validar que DATABASE_URL e REDIS_URL apontam para os containers Docker
 if grep -q "@localhost" "$ENV_FILE" || grep -q "@127.0.0.1" "$ENV_FILE"; then
-    warn "ATENÇÃO: DATABASE_URL ou REDIS_URL aponta para localhost."
-    warn "Em produção deve apontar para os containers: @db e @redis"
+    warn "ATENCAO: DATABASE_URL ou REDIS_URL aponta para localhost."
+    warn "Em producao deve apontar para os containers: @db e @redis"
     warn "Corrija o .env antes de continuar."
     exit 1
 fi
 
 # -----------------------------------------------------------------------------
-step "2/7 Construindo imagem sandbox"
+step "2/9 Buildando frontend"
+# -----------------------------------------------------------------------------
+cd "$REPO_DIR/autograder-web"
+npm ci --silent
+npm run build
+cd "$REPO_DIR"
+[ -d "autograder-web/dist" ] || error "Build do frontend falhou (dist/ nao existe)"
+info "Frontend build ok"
+
+# -----------------------------------------------------------------------------
+step "3/9 Construindo imagem sandbox"
 # -----------------------------------------------------------------------------
 docker build -f "$REPO_DIR/Dockerfile.sandbox" -t autograder-sandbox:latest "$REPO_DIR"
 info "Sandbox ok"
 
 # -----------------------------------------------------------------------------
-step "3/7 Subindo banco e redis"
+step "4/9 Subindo banco e redis"
 # -----------------------------------------------------------------------------
-cd "$REPO_DIR"
-APP_PORT=$APP_PORT docker compose -f docker-compose.prod.yml up -d db redis
-info "Aguardando db ficar saudável..."
-sleep 5
-docker compose -f docker-compose.prod.yml ps db redis
+APP_PORT=$APP_PORT $COMPOSE up -d db redis
+info "Aguardando DB e Redis ficarem healthy..."
+for i in $(seq 1 30); do
+    db_ok=$(docker inspect --format='{{.State.Health.Status}}' autograder-db 2>/dev/null || echo "starting")
+    redis_ok=$(docker inspect --format='{{.State.Health.Status}}' autograder-redis 2>/dev/null || echo "starting")
+    if [ "$db_ok" = "healthy" ] && [ "$redis_ok" = "healthy" ]; then
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        error "Timeout esperando DB/Redis ficarem healthy"
+    fi
+    sleep 2
+done
 info "DB e Redis ok"
 
 # -----------------------------------------------------------------------------
-step "4/7 Buildando imagens e rodando migrations"
+step "5/9 Buildando imagens e rodando migrations"
 # -----------------------------------------------------------------------------
-APP_PORT=$APP_PORT docker compose -f docker-compose.prod.yml build backend worker discord-bot
-APP_PORT=$APP_PORT docker compose -f docker-compose.prod.yml run --rm \
-    --entrypoint "python -m alembic upgrade head" backend
+APP_PORT=$APP_PORT $COMPOSE build backend worker worker-bulk
+APP_PORT=$APP_PORT $COMPOSE --profile discord build discord-bot
+APP_PORT=$APP_PORT $COMPOSE run --rm --entrypoint "python -m alembic upgrade head" backend
 info "Migrations ok"
 
 # -----------------------------------------------------------------------------
-step "5/7 Subindo backend e worker"
+step "6/9 Subindo backend"
 # -----------------------------------------------------------------------------
-APP_PORT=$APP_PORT docker compose -f docker-compose.prod.yml up -d backend worker
-info "Backend e worker ok"
+APP_PORT=$APP_PORT $COMPOSE up -d backend
 sleep 3
 
-# Health check
 HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$APP_PORT/health" 2>/dev/null || echo "000")
 if [ "$HTTP_STATUS" = "200" ]; then
-    info "Health check ok (HTTP $HTTP_STATUS)"
+    info "Backend ok (health check HTTP $HTTP_STATUS)"
 else
-    warn "Health check retornou HTTP $HTTP_STATUS — verifique logs: docker compose -f docker-compose.prod.yml logs backend"
+    warn "Health check retornou HTTP $HTTP_STATUS -- verifique logs: $COMPOSE logs backend"
 fi
 
 # -----------------------------------------------------------------------------
-step "6/7 Setup de dados (produtos e access rules)"
+step "7/9 Subindo workers (celery + celery-bulk)"
 # -----------------------------------------------------------------------------
-APP_PORT=$APP_PORT docker compose -f docker-compose.prod.yml exec backend \
-    python scripts/setup_product_access_rules.py
-info "ProductAccessRules configuradas"
+APP_PORT=$APP_PORT $COMPOSE up -d worker worker-bulk
+info "Workers ok (celery,whatsapp_rt + whatsapp_bulk)"
 
 # -----------------------------------------------------------------------------
-step "7/7 Subindo Discord bot"
+step "8/9 Subindo Discord bot + DB backup"
 # -----------------------------------------------------------------------------
-APP_PORT=$APP_PORT docker compose -f docker-compose.prod.yml --profile discord up -d discord-bot
-info "Discord bot ok"
+APP_PORT=$APP_PORT $COMPOSE --profile discord up -d discord-bot
+APP_PORT=$APP_PORT $COMPOSE up -d db-backup
+info "Discord bot + backup ok"
+
+# -----------------------------------------------------------------------------
+step "9/9 Deployando frontend"
+# -----------------------------------------------------------------------------
+FRONT_PORT=${FRONT_PORT:-5173}
+NGINX_CONTAINER="autograder-nginx"
+if [ -d "nginx/certs" ] && [ -f "nginx/certs/fullchain.pem" ]; then
+    APP_PORT=$APP_PORT $COMPOSE --profile ssl up -d nginx
+    sleep 2
+    if docker ps --format '{{.Names}}' | grep -q "$NGINX_CONTAINER"; then
+        docker cp "autograder-web/dist/." "$NGINX_CONTAINER:/usr/share/nginx/html/"
+        docker exec "$NGINX_CONTAINER" nginx -s reload 2>/dev/null || true
+        info "Nginx + frontend ok (HTTPS)"
+        FRONT_URL="https://$SERVER_IP"
+    else
+        warn "Nginx nao subiu. Verifique certs em nginx/certs/"
+    fi
+fi
+
+if [ -z "${FRONT_URL:-}" ]; then
+    # Sem Nginx: servir o build com npx serve na porta 5173
+    # Matar instancia anterior se existir
+    pkill -f "serve.*autograder-web/dist" 2>/dev/null || true
+    sleep 1
+    cd "$REPO_DIR"
+    nohup npx -y serve -s autograder-web/dist -l "$FRONT_PORT" > /tmp/autograder-frontend.log 2>&1 &
+    FRONT_PID=$!
+    sleep 2
+    if kill -0 "$FRONT_PID" 2>/dev/null; then
+        info "Frontend servindo na porta $FRONT_PORT (pid $FRONT_PID)"
+        FRONT_URL="http://$SERVER_IP:$FRONT_PORT"
+    else
+        warn "Frontend nao subiu. Log: /tmp/autograder-frontend.log"
+        FRONT_URL="(nao iniciado)"
+    fi
+fi
+
+# -----------------------------------------------------------------------------
+step "Setup de dados"
+# -----------------------------------------------------------------------------
+APP_PORT=$APP_PORT $COMPOSE exec -T backend python scripts/setup_product_access_rules.py 2>/dev/null && \
+    info "ProductAccessRules configuradas" || \
+    warn "Script de setup nao encontrado ou falhou (pode rodar depois)"
 
 # -----------------------------------------------------------------------------
 echo ""
-echo -e "${GREEN}══════════════════════════════════════${NC}"
-echo -e "${GREEN}  Deploy concluído!${NC}"
-echo -e "${GREEN}══════════════════════════════════════${NC}"
+echo -e "${GREEN}==================================================${NC}"
+echo -e "${GREEN}  Deploy completo!${NC}"
+echo -e "${GREEN}==================================================${NC}"
 echo ""
-echo "  API:         http://$(curl -s ifconfig.me 2>/dev/null || echo 'IP'):$APP_PORT"
-echo "  Docs:        http://$(curl -s ifconfig.me 2>/dev/null || echo 'IP'):$APP_PORT/docs"
-echo "  Logs:        docker compose -f docker-compose.prod.yml logs -f backend"
+
+APP_PORT=$APP_PORT $COMPOSE --profile discord ps 2>/dev/null || $COMPOSE ps
+
 echo ""
-echo -e "${YELLOW}Próximos passos:${NC}"
-echo "  1. Configure o webhook Hotmart:"
-echo "     URL: http://IP:$APP_PORT/webhooks/hotmart"
+echo "  API:       http://$SERVER_IP:$APP_PORT"
+echo "  Docs:      http://$SERVER_IP:$APP_PORT/docs"
+echo "  Frontend:  $FRONT_URL"
+echo "  Logs:      $COMPOSE logs -f backend worker worker-bulk"
 echo ""
-echo "  2. Onboard dos compradores históricos (envia WhatsApp para todos):"
-echo "     docker compose -f docker-compose.prod.yml exec backend \\"
-echo "       uv run python -c \"from app.tasks import sync_hotmart_buyers, onboard_historical_buyers; sync_hotmart_buyers.run(); print(onboard_historical_buyers.run())\""
+echo -e "${YELLOW}Criar usuario admin:${NC}"
 echo ""
-echo "  3. Verificar Discord bot:"
-echo "     docker compose -f docker-compose.prod.yml logs discord-bot"
+echo "  # 1. Gerar hash da senha"
+echo "  docker exec autograder-backend python -c \\"
+echo "    \"from app.auth.security import hash_password; print(hash_password('SUA_SENHA'))\""
+echo ""
+echo "  # 2. Inserir no banco"
+echo "  docker exec autograder-db psql -U autograder -d autograder -c \\"
+echo "    \"INSERT INTO users (email, password_hash, role, whatsapp_number, lifecycle_status)"
+echo "     VALUES ('caio@caiogomes.com.br', 'HASH_DO_PASSO_1', 'ADMIN', '+5511991747887', 'ACTIVE');\""
 echo ""

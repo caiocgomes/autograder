@@ -1108,7 +1108,8 @@ def execute_side_effect(self, event_id: int):
         elif event_type == "evolution.message_sent" and target_user and target_user.whatsapp_number:
             from app.integrations.evolution import send_message
             text = payload.get("text", "")
-            success = send_message(target_user.whatsapp_number, text)
+            send_id = f"retry_{event_type}_{event.id}"
+            success = send_message(target_user.whatsapp_number, text, send_id=send_id)
 
         else:
             return {"status": "skipped", "reason": f"No handler for event type: {event_type}"}
@@ -1757,7 +1758,7 @@ def send_bulk_messages(
 
             recipient.resolved_message = message
 
-            success = _evo.send_message(recipient.phone, message)
+            success = _evo.send_message(recipient.phone, message, send_id=f"campaign_{campaign_id}")
             now = datetime.now(timezone.utc)
 
             if success:

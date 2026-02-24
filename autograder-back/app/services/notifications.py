@@ -44,7 +44,7 @@ def notify_student_welcome(user: User, product_name: str) -> None:
         try:
             from app.integrations.evolution import send_message
             text = f"Bem-vindo ao {product_name}! Seu acesso está ativo. Bons estudos!"
-            send_message(user.whatsapp_number, text)
+            send_message(user.whatsapp_number, text, send_id="notify_welcome")
         except Exception as e:
             logger.error("notify_student_welcome failed: %s", e)
     else:

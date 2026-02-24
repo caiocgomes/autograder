@@ -29,7 +29,7 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
-def send_message(phone: str, text: str) -> bool:
+def send_message(phone: str, text: str, send_id: str | None = None) -> bool:
     """
     Send a WhatsApp text message via Evolution API.
     Phone numbers are normalized automatically (Brazilian numbers without country code
@@ -39,6 +39,10 @@ def send_message(phone: str, text: str) -> bool:
     if not settings.evolution_enabled:
         logger.info("Evolution API disabled. Skipping send_message to %s", phone)
         return True
+
+    if settings.evolution_dev_mode:
+        from app.integrations.evolution_dev import send_message as dev_send
+        return dev_send(phone, text, send_id=send_id)
 
     if not phone:
         logger.warning("send_message called with empty phone number. Skipping.")

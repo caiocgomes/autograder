@@ -79,7 +79,7 @@ class BulkSendResponse(BaseModel):
 
 
 class RecipientStatusOut(BaseModel):
-    user_id: int
+    user_id: Optional[int] = None
     name: Optional[str] = None
     phone: str
     status: str

@@ -51,5 +51,8 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Dev messages (Evolution dev mode)
+dev_messages/
+
 # Claude Code
 .claude/

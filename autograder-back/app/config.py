@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     evolution_api_key: str = ""
     evolution_instance: str = ""
     evolution_enabled: bool = False
+    evolution_dev_mode: bool = False
+    evolution_dev_output_dir: str = "dev_messages"
 
     @property
     def cors_origin_list(self) -> list[str]:

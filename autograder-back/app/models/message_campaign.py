@@ -45,7 +45,7 @@ class MessageRecipient(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     campaign_id = Column(Integer, ForeignKey("message_campaigns.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     phone = Column(String(20), nullable=False)
     name = Column(String(255), nullable=True)
     resolved_message = Column(Text, nullable=True)
