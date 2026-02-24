@@ -1690,7 +1690,9 @@ def send_bulk_messages(
     from datetime import datetime, timedelta, timezone
     from app.integrations import evolution as _evo
     from app.database import SessionLocal
-    from app.models.user import User
+    from app.models.user import User, UserRole
+    from app.models.hotmart_buyer import HotmartBuyer
+    from app.auth.security import hash_password
     from app.models.message_campaign import (
         MessageCampaign,
         MessageRecipient,
@@ -1725,7 +1727,9 @@ def send_bulk_messages(
 
         # Use variations if provided, otherwise fall back to message_template
         _use_variations = bool(variations)
-        has_token_var = "{token}" in message_template
+        has_token_var = "{token}" in message_template or (
+            variations and any("{token}" in v for v in variations)
+        )
 
         for i, recipient in enumerate(pending_recipients):
             name = recipient.name or ""
@@ -1738,7 +1742,35 @@ def send_bulk_messages(
 
             # Token auto-management: generate/regenerate if template uses {token}
             if has_token_var:
-                user = db.query(User).filter(User.id == recipient.user_id).first()
+                user = None
+                if recipient.user_id:
+                    user = db.query(User).filter(User.id == recipient.user_id).first()
+
+                # Auto-create User for buyers without accounts
+                if not user:
+                    buyer = (
+                        db.query(HotmartBuyer)
+                        .filter(HotmartBuyer.phone == recipient.phone)
+                        .first()
+                    )
+                    if buyer:
+                        # Check if User already exists by email (edge case)
+                        user = db.query(User).filter(User.email == buyer.email).first()
+                        if not user:
+                            user = User(
+                                email=buyer.email,
+                                whatsapp_number=buyer.phone,
+                                password_hash=hash_password(_secrets.token_urlsafe(16)),
+                                role=UserRole.STUDENT,
+                                lifecycle_status=None,
+                            )
+                            db.add(user)
+                            db.flush()
+                            _log.info("Auto-created User id=%d for buyer %s", user.id, buyer.email)
+                        # Link buyer to user
+                        buyer.user_id = user.id
+                        recipient.user_id = user.id
+
                 if user:
                     now_check = datetime.now(timezone.utc)
                     needs_new_token = (
