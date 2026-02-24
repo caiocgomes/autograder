@@ -20,6 +20,7 @@ import { GradesPage } from './pages/professor/GradesPage';
 import { EnviosPage } from './pages/professor/EnviosPage';
 import { CampaignDetailPage } from './pages/professor/CampaignDetailPage';
 import { SettingsPage } from './pages/professor/SettingsPage';
+import { StudentsPage } from './pages/professor/StudentsPage';
 import { MyClassesPage } from './pages/student/MyClassesPage';
 import { ExerciseListsViewPage } from './pages/student/ExerciseListsViewPage';
 import { ExerciseDetailPage } from './pages/student/ExerciseDetailPage';
@@ -65,6 +66,7 @@ function App() {
           <Route path="grades" element={<GradesPage />} />
           <Route path="envios" element={<EnviosPage />} />
           <Route path="envios/campaigns/:id" element={<CampaignDetailPage />} />
+          <Route path="students" element={<StudentsPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
 

@@ -7,7 +7,7 @@ API auth: OAuth2 client_credentials flow, token cached in Redis.
 import logging
 import requests
 from datetime import datetime, timedelta
-from typing import Optional, Iterator, Dict
+from typing import Optional, Iterator, Dict, List
 from dataclasses import dataclass
 
 from app.config import settings
@@ -287,6 +287,32 @@ def list_buyers_with_phone(product_id: Optional[str] = None) -> Iterator[dict]:
             logger.warning("Failed to parse sales/users item: %s — %s", item, e)
 
 
+def discover_products() -> List[dict]:
+    """
+    Discover all products from active subscriptions and sales.
+    Returns a list of {"hotmart_product_id": str, "name": str}.
+    """
+    seen: Dict[str, str] = {}
+
+    url = f"{settings.hotmart_api_base}/subscriptions"
+    params = {"status": "ACTIVE", "max_results": 500}
+    for item in _paginate(url, params):
+        product = item.get("product", {})
+        pid = str(product.get("id", ""))
+        if pid and pid not in seen:
+            seen[pid] = product.get("name", pid)
+
+    url = f"{settings.hotmart_api_base}/sales/history"
+    params = {"max_results": 500}
+    for item in _paginate(url, params):
+        product = item.get("product", {})
+        pid = str(product.get("id", ""))
+        if pid and pid not in seen:
+            seen[pid] = product.get("name", pid)
+
+    return [{"hotmart_product_id": pid, "name": name} for pid, name in seen.items()]
+
+
 # Hotmart → business status mapping
 _STATUS_MAP: Dict[str, str] = {
     "APPROVED": "Ativo",
@@ -308,6 +334,75 @@ _STATUS_PRIORITY: Dict[str, int] = {
 }
 
 
+def _fetch_status_window(
+    product_id: str, hotmart_status: str, start: datetime, end: datetime
+) -> List[tuple]:
+    """Fetch all buyers for a single (status, time-window) pair. Returns [(email, biz_status)]."""
+    url = f"{settings.hotmart_api_base}/sales/history"
+    results = []
+    page_token = None
+    biz_status = _STATUS_MAP.get(hotmart_status, "")
+    if not biz_status:
+        return results
+
+    while True:
+        params: Dict = {
+            "max_results": 500,
+            "product_id": product_id,
+            "transaction_status": hotmart_status,
+            "start_date": int(start.timestamp() * 1000),
+            "end_date": int(end.timestamp() * 1000),
+        }
+        if page_token:
+            params["page_token"] = page_token
+
+        try:
+            import time as _time
+            token = get_access_token()
+            if not token:
+                break
+            resp = None
+            for _attempt in range(3):
+                resp = requests.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                    timeout=30,
+                )
+                if resp.status_code == 429:
+                    wait = 5 * (_attempt + 1)
+                    logger.warning("get_buyer_statuses: 429, backing off %ds", wait)
+                    _time.sleep(wait)
+                    continue
+                break
+            if resp is None or resp.status_code == 429:
+                break
+            if resp.status_code == 401:
+                try:
+                    from app.redis_client import get_redis_client
+                    get_redis_client().delete(_TOKEN_CACHE_KEY)
+                except Exception:
+                    pass
+                break
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+        except Exception as e:
+            logger.error("get_buyer_statuses request failed: %s", e)
+            break
+
+        for item in data.get("items", []):
+            email = item.get("buyer", {}).get("email", "").lower().strip()
+            if email:
+                results.append((email, biz_status))
+
+        page_token = data.get("page_info", {}).get("next_page_token")
+        if not page_token:
+            break
+
+    return results
+
+
 def get_buyer_statuses(product_id: str, years: int = 6) -> Dict[str, str]:
     """
     Return a dict mapping buyer email -> business status for a given product.
@@ -315,8 +410,11 @@ def get_buyer_statuses(product_id: str, years: int = 6) -> Dict[str, str]:
     Scans up to `years` of Hotmart sales history in 30-day windows.
     When a buyer has multiple transaction statuses, the highest-priority wins:
     Ativo > Inadimplente > Cancelado > Reembolsado.
+
+    Parallelizes the 8 status types per time window using threads.
     """
-    url = f"{settings.hotmart_api_base}/sales/history"
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     buyer_statuses: Dict[str, str] = {}
 
     now = datetime.now()
@@ -326,62 +424,21 @@ def get_buyer_statuses(product_id: str, years: int = 6) -> Dict[str, str]:
 
     all_hotmart_statuses = list(_STATUS_MAP.keys())
 
-    while end > cutoff:
-        for hotmart_status in all_hotmart_statuses:
-            page_token = None
-            while True:
-                params: Dict = {
-                    "max_results": 500,
-                    "product_id": product_id,
-                    "transaction_status": hotmart_status,
-                    "start_date": int(start.timestamp() * 1000),
-                    "end_date": int(end.timestamp() * 1000),
-                }
-                if page_token:
-                    params["page_token"] = page_token
-
-                try:
-                    token = get_access_token()
-                    if not token:
-                        break
-                    resp = requests.get(
-                        url,
-                        headers={"Authorization": f"Bearer {token}"},
-                        params=params,
-                        timeout=30,
-                    )
-                    if resp.status_code == 401:
-                        try:
-                            from app.redis_client import get_redis_client
-                            get_redis_client().delete(_TOKEN_CACHE_KEY)
-                        except Exception:
-                            pass
-                        break
-                    if resp.status_code != 200:
-                        break
-                    data = resp.json()
-                except Exception as e:
-                    logger.error("get_buyer_statuses request failed: %s", e)
-                    break
-
-                for item in data.get("items", []):
-                    email = item.get("buyer", {}).get("email", "").lower().strip()
-                    if not email:
-                        continue
-                    biz_status = _STATUS_MAP.get(hotmart_status, "")
-                    if not biz_status:
-                        continue
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        while end > cutoff:
+            futures = {
+                pool.submit(_fetch_status_window, product_id, hs, start, end): hs
+                for hs in all_hotmart_statuses
+            }
+            for future in as_completed(futures):
+                for email, biz_status in future.result():
                     existing = buyer_statuses.get(email)
                     if existing is None or (
                         _STATUS_PRIORITY.get(biz_status, 0) > _STATUS_PRIORITY.get(existing, 0)
                     ):
                         buyer_statuses[email] = biz_status
 
-                page_token = data.get("page_info", {}).get("next_page_token")
-                if not page_token:
-                    break
-
-        end = start
-        start = end - timedelta(days=30)
+            end = start
+            start = end - timedelta(days=30)
 
     return buyer_statuses

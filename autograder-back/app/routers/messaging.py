@@ -5,10 +5,10 @@ from typing import Optional, List
 
 from app.database import get_db
 from app.auth.dependencies import require_role
-from app.models.user import User, UserRole, LifecycleStatus
+from app.models.user import User, UserRole
 from app.models.product import Product
 from app.models.hotmart_buyer import HotmartBuyer
-from app.models.hotmart_product_mapping import HotmartProductMapping
+from app.course_mapping import COURSES, get_source_product_ids
 from app.models.message_campaign import (
     MessageCampaign,
     MessageRecipient,
@@ -39,80 +39,73 @@ def list_courses(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.ADMIN)),
 ):
-    """List courses available for messaging (products that are targets in hotmart_product_mapping)."""
-    target_id_rows = db.query(distinct(HotmartProductMapping.target_product_id)).all()
-    target_ids = [row[0] for row in target_id_rows]
-    if not target_ids:
-        return []
-    courses = (
+    """List courses available for messaging (from code-defined COURSES mapping)."""
+    # Match code-defined courses to Products in DB by hotmart_product_id
+    products = (
         db.query(Product)
-        .filter(Product.id.in_(target_ids))
+        .filter(Product.hotmart_product_id.in_(list(COURSES.keys())))
         .order_by(Product.name)
         .all()
     )
-    return [CourseOut(id=c.id, name=c.name) for c in courses]
+    return [CourseOut(id=c.id, name=c.name) for c in products]
 
 
 @router.get("/recipients", response_model=List[RecipientOut])
 def list_recipients(
     course_id: int = Query(...),
     has_whatsapp: Optional[bool] = Query(None),
-    lifecycle_status: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.ADMIN)),
 ):
-    """List students of a course (people who bought any product that maps to this course)."""
+    """List buyers of a course (direct purchase + bundles that include it)."""
     course = db.query(Product).filter(Product.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Curso não encontrado")
 
-    source_ids = (
-        db.query(HotmartProductMapping.source_hotmart_product_id)
-        .filter(HotmartProductMapping.target_product_id == course_id)
-        .all()
-    )
-    hotmart_product_ids = [row[0] for row in source_ids]
+    # Get all hotmart_product_ids that grant access to this course (direct + bundles)
+    hotmart_product_ids = get_source_product_ids(str(course.hotmart_product_id))
 
     if not hotmart_product_ids:
         return []
 
-    query = (
-        db.query(User, HotmartBuyer.name.label("buyer_name"))
-        .join(HotmartBuyer, HotmartBuyer.user_id == User.id)
-        .filter(HotmartBuyer.hotmart_product_id.in_(hotmart_product_ids))
+    # Query hotmart_buyers directly (don't require User account)
+    query = db.query(HotmartBuyer).filter(
+        HotmartBuyer.hotmart_product_id.in_(hotmart_product_ids)
     )
 
-    if lifecycle_status is not None:
-        try:
-            ls = LifecycleStatus(lifecycle_status)
-        except ValueError:
-            raise HTTPException(
-                status_code=422,
-                detail=f"lifecycle_status inválido: {lifecycle_status}. Valores válidos: {[s.value for s in LifecycleStatus]}",
-            )
-        query = query.filter(User.lifecycle_status == ls)
-
-    if has_whatsapp is True:
-        query = query.filter(User.whatsapp_number.isnot(None), User.whatsapp_number != "")
-    elif has_whatsapp is False:
-        query = query.filter((User.whatsapp_number.is_(None)) | (User.whatsapp_number == ""))
-
-    rows = query.order_by(User.id).all()
-
+    # Deduplicate by email, collect phone from buyer or linked user
     seen = set()
     recipients = []
-    for user, buyer_name in rows:
-        if user.id in seen:
+    buyers = query.order_by(HotmartBuyer.email).all()
+
+    # Pre-load linked users
+    buyer_emails = list({b.email for b in buyers})
+    users = db.query(User).filter(User.email.in_(buyer_emails)).all()
+    user_by_email = {u.email: u for u in users}
+
+    for buyer in buyers:
+        if buyer.email in seen:
             continue
-        seen.add(user.id)
-        display_name = buyer_name if buyer_name else user.email
+        seen.add(buyer.email)
+
+        user = user_by_email.get(buyer.email)
+        phone = buyer.phone or (user.whatsapp_number if user else None)
+        display_name = buyer.name or buyer.email
+
+        # For has_whatsapp filter
+        has_wp = bool(phone)
+        if has_whatsapp is True and not has_wp:
+            continue
+        if has_whatsapp is False and has_wp:
+            continue
+
         recipients.append(
             RecipientOut(
-                id=user.id,
+                id=user.id if user else 0,
                 name=display_name,
-                email=user.email,
-                whatsapp_number=user.whatsapp_number,
-                has_whatsapp=bool(user.whatsapp_number),
+                email=buyer.email,
+                whatsapp_number=phone,
+                has_whatsapp=has_wp,
             )
         )
 

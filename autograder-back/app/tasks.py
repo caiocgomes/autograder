@@ -1252,10 +1252,10 @@ def sync_hotmart_students(self, product_id=None):
 # Student Course Status Sync Helpers
 # ---------------------------------------------------------------------------
 
-def _update_scd2(user_id: int, product_id: int, new_status: str, source: str, db) -> bool:
+def _update_scd2(user_id: int, product_id: int, new_status: str, source: str, db):
     """
     Update StudentCourseStatus SCD Type 2 for (user_id, product_id).
-    Returns True if a status change occurred, False if no-op (same status).
+    Returns tuple (changed: bool, is_new: bool, new_status: str).
     """
     from app.models.student_course_status import StudentCourseStatus
     import datetime as _dt
@@ -1273,7 +1273,9 @@ def _update_scd2(user_id: int, product_id: int, new_status: str, source: str, db
     )
 
     if current and current.status == new_status:
-        return False
+        return (False, False, new_status)
+
+    is_new = current is None
 
     if current:
         current.valid_to = now
@@ -1288,7 +1290,7 @@ def _update_scd2(user_id: int, product_id: int, new_status: str, source: str, db
         is_current=True,
         source=source,
     ))
-    return True
+    return (True, is_new, new_status)
 
 
 @celery_app.task(name="sync_student_course_status", bind=True, max_retries=0)
@@ -1322,6 +1324,19 @@ def sync_student_course_status(self, product_id=None):
             "skipped_no_phone": 0,
             "skipped_error": 0,
         }
+        transitions = {
+            "new_records": 0,
+            "to_ativo": 0,
+            "to_inadimplente": 0,
+            "to_cancelado": 0,
+            "to_reembolsado": 0,
+        }
+        _transition_key_map = {
+            "Ativo": "to_ativo",
+            "Inadimplente": "to_inadimplente",
+            "Cancelado": "to_cancelado",
+            "Reembolsado": "to_reembolsado",
+        }
 
         for product in products:
             try:
@@ -1338,9 +1353,14 @@ def sync_student_course_status(self, product_id=None):
                     if not user:
                         continue
 
-                    changed = _update_scd2(user.id, product.id, biz_status, "hotmart_sync", db)
+                    changed, is_new, new_status = _update_scd2(user.id, product.id, biz_status, "hotmart_sync", db)
                     if changed:
                         counters["status_changes"] += 1
+                        if is_new:
+                            transitions["new_records"] += 1
+                        key = _transition_key_map.get(new_status)
+                        if key:
+                            transitions[key] += 1
 
                     if not user.whatsapp_number:
                         counters["skipped_no_phone"] += 1
@@ -1356,12 +1376,12 @@ def sync_student_course_status(self, product_id=None):
 
         db.add(Event(
             type="course_status.sync_completed",
-            payload={**counters, "product_id": product_id},
+            payload={**counters, "status_transitions": transitions, "product_id": product_id},
             status=EventStatus.PROCESSED,
         ))
         db.commit()
 
-        return {"status": "ok", **counters}
+        return {"status": "ok", **counters, "status_transitions": transitions}
 
     except Exception as e:
         db.rollback()
@@ -1375,20 +1395,32 @@ def sync_student_course_status(self, product_id=None):
 # Hotmart Buyer Snapshot Sync
 # ---------------------------------------------------------------------------
 
-@celery_app.task(name="sync_hotmart_buyers", bind=True, max_retries=0)
+def _fetch_product_statuses(hotmart_product_id: str):
+    """Fetch buyer statuses for a single product (pure I/O, no DB)."""
+    from app.integrations import hotmart as _hotmart
+    import logging as _log_mod
+    _log = _log_mod.getLogger(__name__)
+
+    try:
+        return {"buyer_statuses": _hotmart.get_buyer_statuses(hotmart_product_id)}
+    except Exception as e:
+        _log.error("_fetch_product_statuses: failed for %s: %s", hotmart_product_id, e)
+        return {"error": str(e), "buyer_statuses": {}}
+
+
+@celery_app.task(name="sync_hotmart_buyers", bind=True, max_retries=0, soft_time_limit=3600, time_limit=3900)
 def sync_hotmart_buyers(self, product_id=None):
     """
     Snapshot de todos os compradores Hotmart no banco local.
 
     Para cada produto ativo:
-    1. Busca statuses de compradores via API Hotmart
+    1. Busca statuses de compradores via API Hotmart (paralelo por produto)
     2. Faz UPSERT em hotmart_buyers (por email + hotmart_product_id)
     3. Resolve user_id pelo email (NULL se não tem conta na plataforma)
     4. Registra evento com contadores ao final
     """
     import logging as _logging
     import datetime as _dt
-    from app.integrations import hotmart
     from app.models.event import Event, EventStatus
     from app.models.user import User
     from app.models.product import Product
@@ -1412,19 +1444,20 @@ def sync_hotmart_buyers(self, product_id=None):
 
         now = _dt.datetime.now(_dt.timezone.utc)
 
+        # Step 1: Fetch statuses + contacts per product sequentially (parallel status types within each)
+        import time as _time
+        from app.integrations import hotmart as _hotmart_mod
+        _log.info("sync_hotmart_buyers: fetching %d products (4 threads per product)", len(products))
+        product_data = {}
         for product in products:
-            try:
-                buyer_statuses = hotmart.get_buyer_statuses(str(product.hotmart_product_id))
-            except Exception as e:
-                _log.error("sync_hotmart_buyers: failed to fetch for product %s: %s", product.id, e)
-                counters["errors"] += 1
-                continue
+            data = _fetch_product_statuses(str(product.hotmart_product_id))
+            _log.info("sync_hotmart_buyers: fetched statuses for product %s (%s) - %d buyers",
+                       product.id, product.name, len(data.get("buyer_statuses", {})))
+            _time.sleep(3)  # cooldown before contact info fetch
 
-            # Fetch contact info (name + phone) from /sales/users.
-            # May not cover all historical buyers — fields stay nullable for those.
             contact_info = {}
             try:
-                for buyer in hotmart.list_buyers_with_phone(str(product.hotmart_product_id)):
+                for buyer in _hotmart_mod.list_buyers_with_phone(str(product.hotmart_product_id)):
                     email_key = buyer.get("email", "")
                     if email_key:
                         contact_info[email_key] = {
@@ -1432,8 +1465,22 @@ def sync_hotmart_buyers(self, product_id=None):
                             "phone": buyer.get("phone", ""),
                         }
             except Exception as e:
-                _log.warning("sync_hotmart_buyers: failed to fetch contact info for product %s: %s",
-                             product.id, e)
+                _log.warning("sync_hotmart_buyers: failed contact info for product %s: %s", product.id, e)
+            data["contact_info"] = contact_info
+            _log.info("sync_hotmart_buyers: fetched contacts for product %s (%s) - %d contacts",
+                       product.id, product.name, len(contact_info))
+            product_data[product.id] = data
+            _time.sleep(3)  # cooldown between products
+
+        # Step 3: Write to DB sequentially
+        for product in products:
+            data = product_data.get(product.id, {})
+            if "error" in data:
+                counters["errors"] += 1
+                continue
+
+            buyer_statuses = data["buyer_statuses"]
+            contact_info = data.get("contact_info", {})
 
             for email, status in buyer_statuses.items():
                 try:
@@ -1769,3 +1816,154 @@ def send_bulk_messages(
 
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Full Student Sync Coordinator
+# ---------------------------------------------------------------------------
+
+_SYNC_LOCK_KEY = "sync:students:lock"
+_SYNC_LOCK_TTL = 600  # 10 minutes
+_SYNC_RESULT_TTL = 3600  # 1 hour
+
+
+@celery_app.task(name="sync_students_full", bind=True, max_retries=0, soft_time_limit=3600, time_limit=3900)
+def sync_students_full(self, product_id=None):
+    """
+    Coordinate a full Hotmart sync: buyers snapshot + course status update.
+    Stores progress and result in Redis for frontend polling.
+    """
+    import json as _json
+    import logging as _logging
+    import datetime as _dt
+
+    _log = _logging.getLogger(__name__)
+
+    try:
+        from app.redis_client import get_redis_client
+        redis = get_redis_client()
+    except Exception as e:
+        _log.error("sync_students_full: Redis unavailable: %s", e)
+        return {"error": str(e)}
+
+    task_id = self.request.id or "unknown"
+    result_key = f"sync:students:result:{task_id}"
+    started_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+    # Acquire lock
+    if not redis.set(_SYNC_LOCK_KEY, task_id, nx=True, ex=_SYNC_LOCK_TTL):
+        _log.warning("sync_students_full: lock already held")
+        redis.setex(result_key, _SYNC_RESULT_TTL, _json.dumps({
+            "status": "failed",
+            "started_at": started_at,
+            "error": "Another sync is already running",
+        }))
+        return {"error": "lock_held"}
+
+    # Set initial running status
+    redis.setex(result_key, _SYNC_RESULT_TTL, _json.dumps({
+        "status": "running",
+        "started_at": started_at,
+    }))
+
+    try:
+        # Step 0: Auto-discover products from Hotmart API
+        _log.info("sync_students_full: discovering products from Hotmart")
+        from app.integrations import hotmart
+        from app.models.product import Product
+
+        db = SessionLocal()
+        try:
+            discovered = hotmart.discover_products()
+            for prod_info in discovered:
+                hid = prod_info["hotmart_product_id"]
+                exists = db.query(Product).filter(Product.hotmart_product_id == hid).first()
+                if not exists:
+                    db.add(Product(name=prod_info["name"], hotmart_product_id=hid, is_active=True))
+                    _log.info("sync_students_full: created product %s (%s)", hid, prod_info["name"])
+            db.commit()
+            _log.info("sync_students_full: discovered %d products", len(discovered))
+        except Exception as e:
+            db.rollback()
+            _log.error("sync_students_full: product discovery failed: %s", e)
+        finally:
+            db.close()
+
+        # Step 1: Sync hotmart buyers
+        _log.info("sync_students_full: starting sync_hotmart_buyers")
+        buyers_result = sync_hotmart_buyers(product_id)
+
+        if "error" in buyers_result:
+            result = {
+                "status": "failed",
+                "started_at": started_at,
+                "completed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                "error": f"sync_hotmart_buyers failed: {buyers_result['error']}",
+            }
+            redis.setex(result_key, _SYNC_RESULT_TTL, _json.dumps(result))
+            return result
+
+        # Step 2: Sync student course status (returns transition breakdown)
+        _log.info("sync_students_full: starting sync_student_course_status")
+        status_result = sync_student_course_status(product_id)
+
+        if "error" in status_result:
+            result = {
+                "status": "failed",
+                "started_at": started_at,
+                "completed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                "error": f"sync_student_course_status failed: {status_result['error']}",
+                "summary": {
+                    "total_processed": buyers_result.get("total", 0),
+                    "new_students": buyers_result.get("inserted", 0),
+                    "status_changes": {"to_ativo": 0, "to_inadimplente": 0, "to_cancelado": 0, "to_reembolsado": 0},
+                    "errors": status_result.get("skipped_error", 0),
+                },
+            }
+            redis.setex(result_key, _SYNC_RESULT_TTL, _json.dumps(result))
+            return result
+
+        # Step 3: Build summary
+        st = status_result.get("status_transitions", {})
+        summary = {
+            "total_processed": status_result.get("synced", 0),
+            "new_students": buyers_result.get("inserted", 0),
+            "status_changes": {
+                "to_ativo": st.get("to_ativo", 0),
+                "to_inadimplente": st.get("to_inadimplente", 0),
+                "to_cancelado": st.get("to_cancelado", 0),
+                "to_reembolsado": st.get("to_reembolsado", 0),
+            },
+            "errors": status_result.get("skipped_error", 0),
+        }
+
+        result = {
+            "status": "completed",
+            "started_at": started_at,
+            "completed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "summary": summary,
+        }
+        redis.setex(result_key, _SYNC_RESULT_TTL, _json.dumps(result))
+
+        _log.info("sync_students_full: completed. summary=%s", summary)
+        return result
+
+    except Exception as e:
+        _log.error("sync_students_full: fatal error: %s", e)
+        result = {
+            "status": "failed",
+            "started_at": started_at,
+            "completed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "error": str(e),
+        }
+        try:
+            redis.setex(result_key, _SYNC_RESULT_TTL, _json.dumps(result))
+        except Exception:
+            pass
+        return result
+
+    finally:
+        try:
+            redis.delete(_SYNC_LOCK_KEY)
+        except Exception:
+            pass
