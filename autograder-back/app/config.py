@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     discord_bot_token: str = ""
     discord_guild_id: str = ""
     discord_registration_channel_id: str = ""
+    discord_invite_url: str = ""
     discord_enabled: bool = False
 
     # Evolution API integration (WhatsApp)

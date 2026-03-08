@@ -118,6 +118,18 @@ class TestRegistrarCommand:
         sent_message = interaction.response.send_message.call_args[0][0]
         assert any(word in sent_message for word in ["já", "registrado", "Registrado"])
 
+    def test_dm_without_guild_sends_server_instructions(self):
+        """Command used in DM (no guild) should tell user to use it inside the server."""
+        interaction = _make_interaction(channel_id="999", user_id="9999")
+        interaction.guild_id = None
+
+        from app.discord_bot import registrar
+        run(registrar.callback(interaction, codigo="VALIDTOK"))
+
+        interaction.response.send_message.assert_called_once()
+        sent_message = interaction.response.send_message.call_args[0][0]
+        assert "dentro do servidor" in sent_message
+
     def test_wrong_channel_sends_redirect_message(self):
         # Channel 111 != registration channel 888
         interaction = _make_interaction(channel_id="111", user_id="9999")

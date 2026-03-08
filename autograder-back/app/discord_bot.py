@@ -9,6 +9,7 @@ Features:
 """
 import logging
 import sys
+import time
 from datetime import datetime, timezone
 
 import discord
@@ -24,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
 intents.members = True  # Required for on_member_join
+intents.message_content = True  # Required for on_message
+
+# Cooldown: don't spam the same user with registration reminders
+# Maps discord user id -> last reminder timestamp
+_reminder_cooldown: dict[int, float] = {}
+REMINDER_COOLDOWN_SECONDS = 3600  # 1 hour
 
 
 class AutograderBot(discord.Client):
@@ -48,6 +55,17 @@ bot = AutograderBot()
 @app_commands.describe(codigo="Código de 8 caracteres enviado via WhatsApp")
 async def registrar(interaction: discord.Interaction, codigo: str):
     """Link a Discord account to a student record via onboarding token."""
+    # Block DMs — command must be used inside the server
+    if not interaction.guild_id:
+        await interaction.response.send_message(
+            "Este comando precisa ser usado dentro do servidor do Discord, não em mensagem direta.\n\n"
+            "1. Entre no servidor pelo link de convite enviado por WhatsApp\n"
+            "2. Vá no canal #registro\n"
+            "3. Digite `/registrar codigo:SEU_CODIGO`",
+            ephemeral=True,
+        )
+        return
+
     # Restrict to registration channel if configured
     if settings.discord_registration_channel_id:
         if str(interaction.channel_id) != settings.discord_registration_channel_id:
@@ -127,6 +145,47 @@ async def registrar(interaction: discord.Interaction, codigo: str):
         )
     finally:
         db.close()
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    """Remind unregistered members to use /registrar when they send a message."""
+    # Ignore bots and DMs
+    if message.author.bot or not message.guild:
+        return
+
+    # Only our guild
+    if str(message.guild.id) != settings.discord_guild_id:
+        return
+
+    member = message.author
+    # If member has roles beyond @everyone, they're already registered
+    if len(member.roles) > 1:
+        return
+
+    # Cooldown check
+    now = time.time()
+    last_reminded = _reminder_cooldown.get(member.id, 0)
+    if now - last_reminded < REMINDER_COOLDOWN_SECONDS:
+        return
+
+    _reminder_cooldown[member.id] = now
+
+    registration_channel = ""
+    if settings.discord_registration_channel_id:
+        registration_channel = f" <#{settings.discord_registration_channel_id}>"
+
+    try:
+        await message.reply(
+            f"Olá {member.display_name}! Você ainda não registrou sua conta.\n\n"
+            f"Para liberar o acesso, vá no canal{registration_channel} #registro "
+            f"e use o comando `/registrar codigo:SEU_CODIGO`\n"
+            f"(o código foi enviado via WhatsApp quando você fez a compra)",
+            mention_author=True,
+        )
+        logger.info("Sent registration reminder to unregistered member %s", member.id)
+    except discord.Forbidden:
+        logger.warning("Could not reply to member %s", member.id)
 
 
 @bot.event

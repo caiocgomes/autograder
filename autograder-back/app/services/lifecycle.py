@@ -25,8 +25,11 @@ logger = logging.getLogger(__name__)
 # WhatsApp message templates for lifecycle events
 MSG_ONBOARDING = (
     "Olá! Seu acesso ao {product_name} foi confirmado.\n\n"
-    "Para liberar seu acesso ao Discord, use o comando /registrar com o token abaixo:\n\n"
-    "Token: {onboarding_token}\n\n"
+    "Para liberar seu acesso, siga estes passos:\n\n"
+    "1. Entre no nosso servidor do Discord: {discord_invite_url}\n"
+    "2. Vá no canal #registro\n"
+    "3. Digite: /registrar codigo:{onboarding_token}\n\n"
+    "Seu token: {onboarding_token}\n"
     "O token expira em 7 dias."
 )
 MSG_WELCOME = (
@@ -186,6 +189,7 @@ def _side_effects_for_pending_onboarding(
     token = generate_onboarding_token(db, user)
 
     if user.whatsapp_number:
+        from app.config import settings
         product_name = product.name if product else ""
         template = _get_template(db, TemplateEventType.ONBOARDING, MSG_ONBOARDING)
         nome = user.email.split("@")[0]
@@ -195,6 +199,7 @@ def _side_effects_for_pending_onboarding(
             "token": token,
             "nome": nome,
             "primeiro_nome": nome.split()[0] if nome else "",
+            "discord_invite_url": settings.discord_invite_url,
         }
         text = _resolve_lifecycle_template(template, variables)
         sid = f"onboarding_{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
