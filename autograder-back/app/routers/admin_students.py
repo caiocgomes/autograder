@@ -130,10 +130,6 @@ def list_students(
             if not phone and b.phone:
                 phone = b.phone
 
-        # If user exists, prefer user's name
-        if user and user.full_name:
-            name = user.full_name
-
         product_statuses = []
         for b in buyer_records:
             product_statuses.append(

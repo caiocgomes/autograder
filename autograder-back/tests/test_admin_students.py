@@ -7,18 +7,57 @@ from fastapi.testclient import TestClient
 from main import app
 from app.database import get_db
 from app.auth.dependencies import get_current_user
-from app.models.user import User, UserRole, LifecycleStatus
+from app.models.user import User, UserRole
+from app.models.product import Product
+from app.models.hotmart_buyer import HotmartBuyer
 
 
-def _make_student(id, email, discord_id=None, whatsapp=None, lifecycle_status=None):
+def _make_buyer(email, name=None, phone=None, hotmart_product_id="PROD1", status="Ativo"):
+    buyer = Mock(spec=HotmartBuyer)
+    buyer.email = email
+    buyer.name = name
+    buyer.phone = phone
+    buyer.hotmart_product_id = hotmart_product_id
+    buyer.status = status
+    return buyer
+
+
+def _make_user(id, email, discord_id=None):
     user = Mock(spec=User)
     user.id = id
     user.email = email
-    user.role = UserRole.STUDENT
     user.discord_id = discord_id
-    user.whatsapp_number = whatsapp
-    user.lifecycle_status = lifecycle_status
     return user
+
+
+def _setup_list_mock(mock_db, products, email_rows, total, buyers, users):
+    """Configure mock_db for the list_students endpoint query chain."""
+    call_count = {"n": 0}
+
+    def query_side_effect(*args):
+        call_count["n"] += 1
+        result = MagicMock()
+        if call_count["n"] == 1:
+            # db.query(Product).all() → product lookup
+            result.all.return_value = products
+        elif call_count["n"] == 2:
+            # db.query(HotmartBuyer) → main buyer query chain
+            emails_query = MagicMock()
+            emails_query.count.return_value = total
+            emails_query.order_by.return_value.offset.return_value.limit.return_value.all.return_value = [
+                (e,) for e in email_rows
+            ]
+            result.filter.return_value = result  # status/product filters chain back
+            result.with_entities.return_value.distinct.return_value = emails_query
+        elif call_count["n"] == 3:
+            # db.query(HotmartBuyer).filter(email.in_(...)).all() → batch load buyers
+            result.filter.return_value.all.return_value = buyers
+        elif call_count["n"] == 4:
+            # db.query(User).filter(email.in_(...)).all() → load users
+            result.filter.return_value.all.return_value = users
+        return result
+
+    mock_db.query.side_effect = query_side_effect
 
 
 @pytest.fixture
@@ -46,46 +85,27 @@ def student_user():
 class TestListStudents:
     def test_list_students_no_filters(self, admin_user):
         """Basic listing returns students with aggregated data."""
-        students = [
-            _make_student(1, "alice@test.com", discord_id="123", whatsapp="+5511999"),
-            _make_student(2, "bob@test.com"),
+        product = Mock(spec=Product)
+        product.hotmart_product_id = "PROD1"
+        product.name = "Curso Python"
+
+        buyers = [
+            _make_buyer("alice@test.com", name="Alice", phone="+5511999", hotmart_product_id="PROD1"),
+            _make_buyer("bob@test.com", name="Bob", hotmart_product_id="PROD1"),
+        ]
+        users = [
+            _make_user(1, "alice@test.com", discord_id="123"),
         ]
 
         mock_db = MagicMock()
-
-        # Main query chain: filter(role=student) → count/order_by/offset/limit
-        student_query = MagicMock()
-        student_query.count.return_value = 2
-        student_query.order_by.return_value.offset.return_value.limit.return_value.all.return_value = students
-
-        # Subqueries for status/product filters won't be called
-        mock_db.query.return_value.filter.return_value = student_query
-
-        # Course statuses query: empty
-        mock_db.query.return_value.join.return_value.filter.return_value.all.return_value = []
-
-        # HotmartBuyer names: empty
-        # Override the second query().filter() call to return empty list
-        # This is tricky with MagicMock chains, so we use side_effect
-
-        call_count = {"n": 0}
-        original_query = mock_db.query
-
-        def query_side_effect(*args):
-            call_count["n"] += 1
-            result = MagicMock()
-            if call_count["n"] == 1:
-                # User query
-                result.filter.return_value = student_query
-            elif call_count["n"] == 2:
-                # StudentCourseStatus + Product join
-                result.join.return_value.filter.return_value.all.return_value = []
-            elif call_count["n"] == 3:
-                # HotmartBuyer names
-                result.filter.return_value.all.return_value = []
-            return result
-
-        mock_db.query.side_effect = query_side_effect
+        _setup_list_mock(
+            mock_db,
+            products=[product],
+            email_rows=["alice@test.com", "bob@test.com"],
+            total=2,
+            buyers=buyers,
+            users=users,
+        )
 
         app.dependency_overrides[get_db] = lambda: mock_db
         app.dependency_overrides[get_current_user] = lambda: admin_user
@@ -99,6 +119,7 @@ class TestListStudents:
         assert data["items"][0]["email"] == "alice@test.com"
         assert data["items"][0]["discord_connected"] is True
         assert data["items"][0]["has_whatsapp"] is True
+        assert data["items"][1]["email"] == "bob@test.com"
         assert data["items"][1]["discord_connected"] is False
         assert data["items"][1]["has_whatsapp"] is False
 
@@ -119,12 +140,14 @@ class TestListStudents:
     def test_list_students_empty(self, admin_user):
         """Empty result returns empty items and total=0."""
         mock_db = MagicMock()
-
-        student_query = MagicMock()
-        student_query.count.return_value = 0
-        student_query.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
-
-        mock_db.query.return_value.filter.return_value = student_query
+        _setup_list_mock(
+            mock_db,
+            products=[],
+            email_rows=[],
+            total=0,
+            buyers=[],
+            users=[],
+        )
 
         app.dependency_overrides[get_db] = lambda: mock_db
         app.dependency_overrides[get_current_user] = lambda: admin_user
@@ -141,12 +164,14 @@ class TestListStudents:
     def test_list_students_pagination(self, admin_user):
         """Pagination params are passed through."""
         mock_db = MagicMock()
-
-        student_query = MagicMock()
-        student_query.count.return_value = 100
-        student_query.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
-
-        mock_db.query.return_value.filter.return_value = student_query
+        _setup_list_mock(
+            mock_db,
+            products=[],
+            email_rows=[],
+            total=100,
+            buyers=[],
+            users=[],
+        )
 
         app.dependency_overrides[get_db] = lambda: mock_db
         app.dependency_overrides[get_current_user] = lambda: admin_user
