@@ -1,3 +1,5 @@
+# DEPRECATED: Use systemd services instead. See systemd/ directory and deploy-systemd.sh.
+# This file is kept for reference and rollback only.
 version: '3.8'
 
 services:

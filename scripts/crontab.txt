@@ -1,0 +1,5 @@
+# Autograder cron jobs
+# Install with: sudo crontab -u autograder /opt/autograder/scripts/crontab.txt
+
+# Daily database backup at 02:00 UTC
+0 2 * * * /opt/autograder/scripts/backup-db.sh >> /var/log/autograder-backup.log 2>&1

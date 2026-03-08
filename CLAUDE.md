@@ -40,13 +40,12 @@ npm run build      # TypeScript check + Vite production build
 npm run lint       # ESLint
 ```
 
-### Infrastructure (run from repo root)
+### Infrastructure — Local Development (run from repo root)
 
 ```bash
-docker compose up -d                                          # Start Postgres + Redis + backend + worker
+docker compose up -d                                          # Start Postgres + Redis (local dev only)
 docker compose --profile discord up -d                        # Also start Discord bot
 docker compose logs -f backend                                # Follow backend logs
-docker compose logs -f worker                                 # Follow worker logs
 docker build -f Dockerfile.sandbox -t autograder-sandbox .    # Build sandbox image (required for code execution)
 ```
 
@@ -56,7 +55,24 @@ docker build -f Dockerfile.sandbox -t autograder-sandbox .    # Build sandbox im
 uv run python -m app.discord_bot                              # Start Discord bot locally
 ```
 
-Production: `docker compose -f docker-compose.prod.yml up -d` (adds nginx, db-backup, SSL)
+### Infrastructure — Production (systemd on server)
+
+```bash
+sudo ./deploy-systemd.sh                                      # Full deploy (pull, deps, migrate, build, restart)
+sudo ./scripts/setup-server.sh                                # First-time server setup
+sudo ./scripts/migrate-from-docker.sh                         # One-time: migrate data from Docker PostgreSQL
+
+systemctl status autograder-api                                # Check API status
+systemctl restart autograder-api                               # Restart API
+systemctl restart autograder-worker autograder-worker-bulk     # Restart workers
+journalctl -u autograder-api -f                                # Follow API logs
+journalctl -u autograder-worker -f                             # Follow worker logs
+journalctl -u autograder-discord -f                            # Follow Discord bot logs
+
+docker build -f Dockerfile.sandbox -t autograder-sandbox .    # Build sandbox image (still uses Docker)
+```
+
+Production services: PostgreSQL 16, Redis 7, nginx via apt/systemd. App processes (API, workers, Discord bot) via systemd unit files in `systemd/` directory. Docker used only for sandbox execution.
 
 ### API Docs
 

@@ -1,0 +1,20 @@
+[Unit]
+Description=Autograder Celery Worker (default + whatsapp_rt)
+After=postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=exec
+User=autograder
+Group=autograder
+WorkingDirectory=/opt/autograder/autograder-back
+EnvironmentFile=/opt/autograder/.env
+ExecStart=/opt/autograder/autograder-back/.venv/bin/celery -A app.celery_app worker --loglevel=info --concurrency=4 -Q celery,whatsapp_rt
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=autograder-worker
+
+[Install]
+WantedBy=multi-user.target
