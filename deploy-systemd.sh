@@ -33,28 +33,28 @@ info "Pre-requisitos ok"
 step "2/6 Atualizando codigo"
 # -----------------------------------------------------------------------------
 cd "$REPO_DIR"
-sudo -u autograder git pull origin main
+git pull origin main
 info "Codigo atualizado"
 
 # -----------------------------------------------------------------------------
 step "3/6 Instalando dependencias backend"
 # -----------------------------------------------------------------------------
 cd "$REPO_DIR/autograder-back"
-sudo -u autograder uv sync --all-extras
+uv sync --all-extras
 info "Dependencias Python ok"
 
 # -----------------------------------------------------------------------------
 step "4/6 Aplicando migrations"
 # -----------------------------------------------------------------------------
-sudo -u autograder -E uv run alembic upgrade head
+uv run alembic upgrade head
 info "Migrations ok"
 
 # -----------------------------------------------------------------------------
 step "5/6 Buildando frontend"
 # -----------------------------------------------------------------------------
 cd "$REPO_DIR/autograder-web"
-sudo -u autograder npm ci --silent
-sudo -u autograder npm run build
+npm ci --silent
+npm run build
 [ -d "dist" ] || error "Build do frontend falhou (dist/ nao existe)"
 info "Frontend build ok"
 
